@@ -1,6 +1,9 @@
 export const W = 10
 export const H = 8
 
+// How many moves the generator aims for (the real par can be a little higher)
+export const TARGET_MOVES = 6
+
 // Small seeded random number generator: same seed -> same sequence
 // (like new Random(seed) in C#)
 function mulberry32(seed: number): () => number {
@@ -154,8 +157,12 @@ export function generateLevel(seed: number, minMoves: number): GeneratedLevel {
   return best ?? { rows: FALLBACK, moves: solveLevel(FALLBACK, creature) ?? 0, creature }
 }
 
-// Same number for everyone on the same day (UTC), e.g. 20261111
+// A day as a number, e.g. 20261111 (UTC, so it is the same everywhere in the world)
+export function dayNumber(date: Date = new Date()): number {
+  return date.getUTCFullYear() * 10000 + (date.getUTCMonth() + 1) * 100 + date.getUTCDate()
+}
+
+// Today's puzzle number: same for everyone
 export function dailySeed(): number {
-  const d = new Date()
-  return d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate()
+  return dayNumber()
 }

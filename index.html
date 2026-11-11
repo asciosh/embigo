@@ -40,12 +40,38 @@
       </div>
     </div>
 
+    <div id="board" class="hidden">
+      <div class="card">
+        <button id="board-close" class="close" aria-label="Close">&times;</button>
+        <h2>Daily leaderboard</h2>
+        <p id="board-sub" class="sub"></p>
+        <ol id="board-list"></ol>
+
+        <div id="auth-out">
+          <p class="sub">Log in to save your score. Pick a nickname and a 4-digit PIN: no email needed.</p>
+          <input id="nick" placeholder="Nickname" maxlength="16" autocomplete="off" autocapitalize="off" spellcheck="false" />
+          <input id="pin" placeholder="PIN (4 digits)" type="password" inputmode="numeric" maxlength="4" autocomplete="off" />
+          <div class="row">
+            <button id="btn-login">Log in</button>
+            <button id="btn-register">Create account</button>
+          </div>
+          <p id="auth-error" class="error"></p>
+        </div>
+
+        <div id="auth-in" class="hidden">
+          <p class="sub">Signed in as <b id="me"></b></p>
+          <button id="btn-logout">Log out</button>
+        </div>
+      </div>
+    </div>
+
     <footer id="controls">
+      <button id="btn-board">Leaderboard</button>
       <button id="btn-help">How to play</button>
       <button id="btn-restart">Restart</button>
       <button id="btn-new">New puzzle</button>
       <button id="btn-daily">Daily</button>
-      <p>Arrows / WASD or swipe to slide &middot; R restart &middot; N new &middot; T daily</p>
+      <p>Arrows / WASD or swipe to slide &middot; R restart &middot; N new &middot; T daily &middot; L leaderboard</p>
     </footer>
 
     <script type="module" src="/src/main.ts"></script>
