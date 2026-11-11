@@ -3,12 +3,14 @@ import { EMBI_FRAMES, EMBI_PALETTE } from './embi'
 import { generateLevel, dailySeed } from './generator'
 
 const TILE = 48
+const TARGET_MOVES = 6
 
-let LEVEL: string[] = generateLevel(dailySeed(), 6).rows
-
+// Tiles: '#' rock, '.' ice, 'B' bush (Embi burns it), 'E' Embi start, 'G' goal
 type Position = { x: number; y: number }
 
 // ================= GAME LOGIC (no drawing here) =================
+
+let LEVEL: string[] = generateLevel(dailySeed(), TARGET_MOVES).rows
 
 const rows = LEVEL.length
 const cols = LEVEL[0].length
@@ -22,8 +24,18 @@ function findTile(symbol: string): Position {
   throw new Error(`Tile ${symbol} not found`)
 }
 
-function isWall(x: number, y: number): boolean {
+const burnt = new Set<string>() // bushes already burnt, as "x,y"
+
+function isRock(x: number, y: number): boolean {
   return (LEVEL[y]?.[x] ?? '#') === '#'
+}
+
+function isBush(x: number, y: number): boolean {
+  return LEVEL[y]?.[x] === 'B' && !burnt.has(`${x},${y}`)
+}
+
+function isBlocked(x: number, y: number): boolean {
+  return isRock(x, y) || isBush(x, y)
 }
 
 let start = findTile('E')
@@ -32,28 +44,39 @@ let goal = findTile('G')
 let embi: Position = { ...start }
 let moves = 0
 let won = false
+let label = 'Daily puzzle'
 
 function slide(dx: number, dy: number): void {
   if (won) return
   let { x, y } = embi
-  while (!isWall(x + dx, y + dy)) {
+
+  while (!isBlocked(x + dx, y + dy)) {
     x += dx
     y += dy
     if (x === goal.x && y === goal.y) break
   }
-  if (x === embi.x && y === embi.y) return // blocked: not a move
+
+  const atGoal = x === goal.x && y === goal.y
+
+  // Embi is a fire creature: a bush in front of it burns away
+  let burned = false
+  if (!atGoal && isBush(x + dx, y + dy)) {
+    burnt.add(`${x + dx},${y + dy}`)
+    burned = true
+  }
+
+  if (x === embi.x && y === embi.y && !burned) return // nothing happened: not a move
   embi = { x, y }
   moves++
-  won = x === goal.x && y === goal.y
+  won = atGoal
 }
 
 function restart(): void {
   embi = { ...start }
   moves = 0
   won = false
+  burnt.clear()
 }
-
-let label = 'Daily puzzle'
 
 function loadLevel(newRows: string[], newLabel: string): void {
   LEVEL = newRows
@@ -91,14 +114,33 @@ const embiFrames = EMBI_FRAMES.map(makeFrameCanvas)
 function drawTile(x: number, y: number): void {
   const px = x * TILE
   const py = y * TILE
-  if (isWall(x, y)) {
+  if (isRock(x, y)) {
     ctx.fillStyle = '#4a4a6a'
     ctx.fillRect(px, py, TILE, TILE)
     ctx.fillStyle = '#5d5d82'
     ctx.fillRect(px + 4, py + 4, TILE - 8, 8)
-  } else {
-    ctx.fillStyle = (x + y) % 2 === 0 ? '#cfe8f5' : '#c2e0f0'
-    ctx.fillRect(px, py, TILE, TILE)
+    return
+  }
+
+  // ice floor
+  ctx.fillStyle = (x + y) % 2 === 0 ? '#cfe8f5' : '#c2e0f0'
+  ctx.fillRect(px, py, TILE, TILE)
+
+  if (isBush(x, y)) {
+    ctx.fillStyle = '#2f8f4e'
+    ctx.beginPath()
+    ctx.arc(px + TILE / 2, py + TILE / 2 + 2, 19, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.fillStyle = '#4fc477'
+    ctx.beginPath()
+    ctx.arc(px + TILE / 2 - 6, py + TILE / 2 - 4, 8, 0, Math.PI * 2)
+    ctx.fill()
+  } else if (burnt.has(`${x},${y}`)) {
+    // ash left by a burnt bush
+    ctx.fillStyle = '#8d99a6'
+    ctx.beginPath()
+    ctx.ellipse(px + TILE / 2, py + TILE / 2 + 8, 14, 6, 0, 0, Math.PI * 2)
+    ctx.fill()
   }
 }
 
@@ -154,10 +196,10 @@ window.addEventListener('keydown', (e) => {
     case 'ArrowRight': slide(1, 0); break
     case 'r': case 'R': restart(); break
     case 'n': case 'N':
-      loadLevel(generateLevel(Math.floor(Math.random() * 1e9), 6).rows, 'Random puzzle')
+      loadLevel(generateLevel(Math.floor(Math.random() * 1e9), TARGET_MOVES).rows, 'Random puzzle')
       break
     case 'd': case 'D':
-      loadLevel(generateLevel(dailySeed(), 6).rows, 'Daily puzzle')
+      loadLevel(generateLevel(dailySeed(), TARGET_MOVES).rows, 'Daily puzzle')
       break
     default: return
   }
