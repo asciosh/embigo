@@ -18,6 +18,24 @@ const CREATURES = {
 let game: Game
 let par = 0
 let busy = false
+let introOpen = false
+
+const INTRO_KEY = 'embigo-intro-seen'
+
+function openIntro(): void {
+  introOpen = true
+  $('intro').classList.remove('hidden')
+}
+
+function closeIntro(): void {
+  introOpen = false
+  $('intro').classList.add('hidden')
+  try {
+    localStorage.setItem(INTRO_KEY, '1')
+  } catch {
+    // storage can be blocked (private mode): the intro will simply show again next time
+  }
+}
 
 function showToast(title: string, text: string): void {
   $('toast').innerHTML = `<b>${title}</b><span>${text}</span>`
@@ -62,7 +80,7 @@ const newPuzzle = () => loadPuzzle(Math.floor(Math.random() * 1e9), 'Random')
 const dailyPuzzle = () => loadPuzzle(dailySeed(), 'Daily')
 
 async function tryMove(dir: Dir): Promise<void> {
-  if (busy) return
+  if (busy || introOpen) return
   const res = game.move(dir)
   if (!res) return
   busy = true
@@ -84,6 +102,10 @@ const KEYS: Record<string, Dir> = {
 }
 
 window.addEventListener('keydown', (e) => {
+  if (introOpen) {
+    if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') closeIntro()
+    return
+  }
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key
   const dir = KEYS[key]
   if (dir) {
@@ -97,6 +119,7 @@ window.addEventListener('keydown', (e) => {
 // swipe for phones
 let touchStart: { x: number; y: number } | null = null
 window.addEventListener('pointerdown', (e) => {
+  if (introOpen) return
   touchStart = { x: e.clientX, y: e.clientY }
 })
 window.addEventListener('pointerup', (e) => {
@@ -112,8 +135,19 @@ window.addEventListener('pointerup', (e) => {
 $('btn-restart').addEventListener('click', restart)
 $('btn-new').addEventListener('click', newPuzzle)
 $('btn-daily').addEventListener('click', dailyPuzzle)
+$('btn-help').addEventListener('click', openIntro)
+$('btn-play').addEventListener('click', closeIntro)
 
 // Open a specific puzzle with ?seed=123 (handy to share a puzzle with friends)
 const seedParam = Number(new URLSearchParams(window.location.search).get('seed'))
 if (Number.isInteger(seedParam) && seedParam > 0) loadPuzzle(seedParam, `#${seedParam}`)
 else dailyPuzzle()
+
+// First visit: show the "how to play" card
+let seen = false
+try {
+  seen = localStorage.getItem(INTRO_KEY) === '1'
+} catch {
+  seen = false
+}
+if (!seen) openIntro()
