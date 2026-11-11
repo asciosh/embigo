@@ -1,18 +1,10 @@
 import './style.css'
 import { EMBI_FRAMES, EMBI_PALETTE } from './embi'
+import { generateLevel, dailySeed } from './generator'
 
 const TILE = 48
 
-const LEVEL: string[] = [
-  '##########',
-  '#E...#...#',
-  '#........#',
-  '#.#...#..#',
-  '#...##...#',
-  '####.##..#',
-  '#.......G#',
-  '##########',
-]
+let LEVEL: string[] = generateLevel(dailySeed(), 6).rows
 
 type Position = { x: number; y: number }
 
@@ -34,8 +26,8 @@ function isWall(x: number, y: number): boolean {
   return (LEVEL[y]?.[x] ?? '#') === '#'
 }
 
-const start = findTile('E')
-const goal = findTile('G')
+let start = findTile('E')
+let goal = findTile('G')
 
 let embi: Position = { ...start }
 let moves = 0
@@ -59,6 +51,16 @@ function restart(): void {
   embi = { ...start }
   moves = 0
   won = false
+}
+
+let label = 'Daily puzzle'
+
+function loadLevel(newRows: string[], newLabel: string): void {
+  LEVEL = newRows
+  label = newLabel
+  start = findTile('E')
+  goal = findTile('G')
+  restart()
 }
 
 // ================= RENDERING (only this part changes later) =================
@@ -126,7 +128,7 @@ function draw(time: number): void {
   ctx.fillStyle = 'white'
   ctx.font = '14px system-ui, sans-serif'
   ctx.textAlign = 'left'
-  ctx.fillText(`Moves: ${moves}    R = restart`, 8, 28)
+  ctx.fillText(`${label}   Moves: ${moves}   R restart  N new  D daily`, 8, 28)
 
   if (won) {
     ctx.fillStyle = 'rgba(0, 0, 0, 0.65)'
@@ -151,6 +153,12 @@ window.addEventListener('keydown', (e) => {
     case 'ArrowLeft': slide(-1, 0); break
     case 'ArrowRight': slide(1, 0); break
     case 'r': case 'R': restart(); break
+    case 'n': case 'N':
+      loadLevel(generateLevel(Math.floor(Math.random() * 1e9), 6).rows, 'Random puzzle')
+      break
+    case 'd': case 'D':
+      loadLevel(generateLevel(dailySeed(), 6).rows, 'Daily puzzle')
+      break
     default: return
   }
   e.preventDefault()
