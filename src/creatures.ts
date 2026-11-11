@@ -32,6 +32,16 @@ function makeEyes(): { eyes: THREE.Group; blink: (time: number) => void } {
   }
 }
 
+function makeSmile(color: number): THREE.Mesh {
+  const smile = new THREE.Mesh(
+    new THREE.TorusGeometry(0.07, 0.014, 8, 24, Math.PI),
+    new THREE.MeshStandardMaterial({ color, roughness: 0.6 }),
+  )
+  smile.rotation.z = Math.PI // arc opening upwards: a smile
+  smile.position.set(0, 0.325, 0.335)
+  return smile
+}
+
 function shadows(root: THREE.Object3D): void {
   root.traverse((o) => {
     if (o instanceof THREE.Mesh) o.castShadow = true
@@ -51,10 +61,6 @@ export function makeEmbi(): CreatureModel {
   const torso = new THREE.Mesh(new THREE.SphereGeometry(0.34, 32, 24), skin)
   torso.scale.set(1, 1.06, 1)
   torso.position.y = 0.36
-
-  const belly = new THREE.Mesh(new THREE.SphereGeometry(0.22, 24, 16), core)
-  belly.scale.set(1, 1.1, 0.7)
-  belly.position.set(0, 0.28, 0.17)
 
   const tip = new THREE.Group()
   tip.position.y = 0.6
@@ -79,7 +85,7 @@ export function makeEmbi(): CreatureModel {
   const footR = footL.clone()
   footR.position.x = 0.14
 
-  body.add(torso, belly, tip, eyes, footL, footR)
+  body.add(torso, tip, eyes, makeSmile(0x5a1a08), footL, footR)
   shadows(group)
 
   const glow = new THREE.PointLight(0xff8a3a, 1.8, 5, 2)
@@ -141,7 +147,7 @@ export function makeDrip(): CreatureModel {
   const footR = footL.clone()
   footR.position.x = 0.14
 
-  body.add(torso, tip, highlight, eyes, footL, footR)
+  body.add(torso, tip, highlight, eyes, makeSmile(0x0b3a7a), footL, footR)
   shadows(group)
 
   const glow = new THREE.PointLight(0x58b8ff, 1.0, 4.5, 2)
