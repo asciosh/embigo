@@ -2,13 +2,33 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#0b1626" />
     <title>Embigo</title>
   </head>
   <body>
-    <h1>Embigo</h1>
     <canvas id="game"></canvas>
-    <p>Use the arrow keys to help Embi reach the star.</p>
+
+    <header id="hud">
+      <div id="logo">Embi<span>go</span></div>
+      <div id="stats">
+        <div><small>Puzzle</small><b id="label">Daily</b></div>
+        <div><small>Moves</small><b id="moves">0</b></div>
+        <div><small>Par</small><b id="par">-</b></div>
+      </div>
+    </header>
+
+    <div id="creature"><i id="dot"></i><div><b id="cname"></b><span id="cpower"></span></div></div>
+
+    <div id="toast" class="hidden"></div>
+
+    <footer id="controls">
+      <button id="btn-restart">Restart</button>
+      <button id="btn-new">New puzzle</button>
+      <button id="btn-daily">Daily</button>
+      <p>Arrows / WASD or swipe to slide &middot; R restart &middot; N new &middot; T daily</p>
+    </footer>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

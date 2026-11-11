@@ -14,13 +14,20 @@ function mulberry32(seed: number): () => number {
   }
 }
 
+export type Creature = 'fire' | 'water'
+
 type Cell = { x: number; y: number }
 type State = { x: number; y: number; mask: number }
 
-// Tiles: '#' rock, '.' floor, 'B' bush, 'E' start, 'G' goal
-// Minimum number of moves to reach the goal, or null if unsolvable.
-// canBurn = true: the creature is made of fire and burns bushes it slides into.
-export function solveLevel(rows: string[], canBurn: boolean): number | null {
+// Tiles: '#' rock, '.' ice, 'B' bush, 'L' lake, 'E' start, 'G' goal
+//  - everybody is stopped by rocks
+//  - fire creature: burns bushes (stops in front, bush disappears), lakes are walls
+//  - water creature: slides across lakes, bushes are walls
+//  - creature = null: no powers (used to check that the obstacles matter)
+// Returns the minimum number of moves to reach the goal, or null if unsolvable.
+export function solveLevel(rows: string[], creature: Creature | null): number | null {
+  const canBurn = creature === 'fire'
+  const canSwim = creature === 'water'
   const grid = rows.map((r) => [...r])
   let start: Cell = { x: 0, y: 0 }
   let goal: Cell = { x: 0, y: 0 }
@@ -53,6 +60,7 @@ export function solveLevel(rows: string[], canBurn: boolean): number | null {
       const blocked = (bx: number, by: number) => {
         const ch = grid[by][bx]
         if (ch === '#') return true
+        if (ch === 'L') return !canSwim
         if (ch === 'B') return (mask & bushBit.get(by * W + bx)!) === 0
         return false
       }
@@ -78,16 +86,29 @@ export function solveLevel(rows: string[], canBurn: boolean): number | null {
   return null
 }
 
-export type GeneratedLevel = { rows: string[]; moves: number }
+export type GeneratedLevel = { rows: string[]; moves: number; creature: Creature }
 
-// Builds random levels and keeps one where:
-//  - Embi (fire) can solve it in about `minMoves` moves
-//  - the bushes really matter: without burning it is impossible or clearly longer
+// A hand-made level used only if the generator ever fails
+const FALLBACK = [
+  '##########',
+  '#E...#...#',
+  '#........#',
+  '#.#...#..#',
+  '#...##...#',
+  '####.##..#',
+  '#.......G#',
+  '##########',
+]
+
+// Builds a level for a creature picked by the seed, keeping one where:
+//  - that creature can solve it in about `minMoves` moves
+//  - its power really matters: without powers it is impossible or clearly longer
 export function generateLevel(seed: number, minMoves: number): GeneratedLevel {
   const rnd = mulberry32(seed)
+  const creature: Creature = rnd() < 0.5 ? 'fire' : 'water'
   let best: GeneratedLevel | null = null
 
-  for (let attempt = 0; attempt < 4000; attempt++) {
+  for (let attempt = 0; attempt < 5000; attempt++) {
     const grid: string[][] = []
     for (let y = 0; y < H; y++) {
       grid.push([...Array(W)].map((_, x) => (x === 0 || y === 0 || x === W - 1 || y === H - 1 ? '#' : '.')))
@@ -101,17 +122,16 @@ export function generateLevel(seed: number, minMoves: number): GeneratedLevel {
       return free
     }
     const pick = (cells: Cell[]) => cells.splice(Math.floor(rnd() * cells.length), 1)[0]
+    const place = (tile: string, count: number) => {
+      for (let i = 0; i < count; i++) {
+        const c = pick(freeCells())
+        grid[c.y][c.x] = tile
+      }
+    }
 
-    const rockCount = 7 + Math.floor(rnd() * 5)
-    for (let i = 0; i < rockCount; i++) {
-      const c = pick(freeCells())
-      grid[c.y][c.x] = '#'
-    }
-    const bushCount = 2 + Math.floor(rnd() * 2)
-    for (let i = 0; i < bushCount; i++) {
-      const c = pick(freeCells())
-      grid[c.y][c.x] = 'B'
-    }
+    place('#', 6 + Math.floor(rnd() * 4))
+    place('B', 2 + Math.floor(rnd() * 2))
+    place('L', 3 + Math.floor(rnd() * 2))
 
     const free = freeCells()
     if (free.length < 2) continue
@@ -121,21 +141,21 @@ export function generateLevel(seed: number, minMoves: number): GeneratedLevel {
     grid[goal.y][goal.x] = 'G'
     const rows = grid.map((r) => r.join(''))
 
-    const moves = solveLevel(rows, true)
+    const moves = solveLevel(rows, creature)
     if (moves === null) continue
-    const withoutFire = solveLevel(rows, false)
-    const bushesMatter = withoutFire === null || withoutFire >= moves + 2
+    const withoutPowers = solveLevel(rows, null)
+    const powerMatters = withoutPowers === null || withoutPowers >= moves + 2
 
-    if (bushesMatter && moves >= minMoves && moves <= minMoves + 3) return { rows, moves }
-    if (bushesMatter && (!best || Math.abs(moves - minMoves) < Math.abs(best.moves - minMoves))) {
-      best = { rows, moves }
+    if (powerMatters && moves >= minMoves && moves <= minMoves + 3) return { rows, moves, creature }
+    if (powerMatters && (!best || Math.abs(moves - minMoves) < Math.abs(best.moves - minMoves))) {
+      best = { rows, moves, creature }
     }
   }
-  return best ?? { rows: [], moves: 0 }
+  return best ?? { rows: FALLBACK, moves: solveLevel(FALLBACK, creature) ?? 0, creature }
 }
 
-// Same number for everyone on the same day, e.g. 20261111
+// Same number for everyone on the same day (UTC), e.g. 20261111
 export function dailySeed(): number {
   const d = new Date()
-  return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate()
+  return d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate()
 }
