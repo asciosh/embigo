@@ -1,60 +1,108 @@
 import './style.css'
-import heroImg from './assets/hero.png'
-import typescriptLogo from './assets/typescript.svg'
-import viteLogo from './assets/vite.svg'
-import { setupCounter } from './counter.ts'
 
-document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-<section id="center">
-  <div class="hero">
-    <img src="${heroImg}" class="base" width="170" height="179">
-    <img src="${typescriptLogo}" class="framework" alt="TypeScript logo"/>
-    <img src="${viteLogo}" class="vite" alt="Vite logo" />
-  </div>
-  <div>
-    <h1>Get started</h1>
-    <p>Edit <code>src/main.ts</code> and save to test <code>HMR</code></p>
-  </div>
-  <button id="counter" type="button" class="counter"></button>
-</section>
+const TILE = 48
 
-<div class="ticks"></div>
+// '#' = rock, '.' = floor, 'E' = Embi's start, 'G' = goal
+const LEVEL: string[] = [
+  '##########',
+  '#E.......#',
+  '#..##....#',
+  '#........#',
+  '#....##..#',
+  '#........#',
+  '#......G.#',
+  '##########',
+]
 
-<section id="next-steps">
-  <div id="docs">
-    <svg class="icon" role="presentation" aria-hidden="true"><use href="/icons.svg#documentation-icon"></use></svg>
-    <h2>Documentation</h2>
-    <p>Your questions, answered</p>
-    <ul>
-      <li>
-        <a href="https://vite.dev/" target="_blank">
-          <img class="logo" src="${viteLogo}" alt="" />
-          Explore Vite
-        </a>
-      </li>
-      <li>
-        <a href="https://www.typescriptlang.org" target="_blank">
-          <img class="button-icon" src="${typescriptLogo}" alt="">
-          Learn more
-        </a>
-      </li>
-    </ul>
-  </div>
-  <div id="social">
-    <svg class="icon" role="presentation" aria-hidden="true"><use href="/icons.svg#social-icon"></use></svg>
-    <h2>Connect with us</h2>
-    <p>Join the Vite community</p>
-    <ul>
-      <li><a href="https://github.com/vitejs/vite" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#github-icon"></use></svg>GitHub</a></li>
-      <li><a href="https://chat.vite.dev/" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#discord-icon"></use></svg>Discord</a></li>
-      <li><a href="https://x.com/vite_js" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#x-icon"></use></svg>X.com</a></li>
-      <li><a href="https://bsky.app/profile/vite.dev" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#bluesky-icon"></use></svg>Bluesky</a></li>
-    </ul>
-  </div>
-</section>
+type Position = { x: number; y: number }
 
-<div class="ticks"></div>
-<section id="spacer"></section>
-`
+const rows = LEVEL.length
+const cols = LEVEL[0].length
 
-setupCounter(document.querySelector<HTMLButtonElement>('#counter')!)
+const canvas = document.getElementById('game') as HTMLCanvasElement
+canvas.width = cols * TILE
+canvas.height = rows * TILE
+const ctx = canvas.getContext('2d')!
+
+function findTile(symbol: string): Position {
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      if (LEVEL[y][x] === symbol) return { x, y }
+    }
+  }
+  throw new Error(`Tile ${symbol} not found`)
+}
+
+function isWall(x: number, y: number): boolean {
+  return (LEVEL[y]?.[x] ?? '#') === '#'
+}
+
+let embi: Position = findTile('E')
+const goal: Position = findTile('G')
+let won = false
+
+function draw(): void {
+  // Map
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      ctx.fillStyle = isWall(x, y) ? '#4a4a6a' : '#cfe8f5'
+      ctx.fillRect(x * TILE, y * TILE, TILE, TILE)
+    }
+  }
+
+  // Goal
+  ctx.fillStyle = '#ffd166'
+  ctx.fillRect(goal.x * TILE + 12, goal.y * TILE + 12, TILE - 24, TILE - 24)
+
+  // Embi: orange body with two eyes
+  const px = embi.x * TILE
+  const py = embi.y * TILE
+  ctx.fillStyle = '#ff7a1a'
+  ctx.beginPath()
+  ctx.arc(px + TILE / 2, py + TILE / 2, TILE / 2 - 6, 0, Math.PI * 2)
+  ctx.fill()
+
+  for (const eyeX of [px + 17, px + 31]) {
+    ctx.fillStyle = 'white'
+    ctx.beginPath()
+    ctx.arc(eyeX, py + 20, 5, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.fillStyle = '#222'
+    ctx.beginPath()
+    ctx.arc(eyeX, py + 21, 2.5, 0, Math.PI * 2)
+    ctx.fill()
+  }
+
+  // Victory message
+  if (won) {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)'
+    ctx.fillRect(0, canvas.height / 2 - 40, canvas.width, 80)
+    ctx.fillStyle = 'white'
+    ctx.font = 'bold 28px system-ui, sans-serif'
+    ctx.textAlign = 'center'
+    ctx.fillText('Embi made it!', canvas.width / 2, canvas.height / 2 + 10)
+  }
+}
+
+function tryMove(dx: number, dy: number): void {
+  if (won) return
+  const nx = embi.x + dx
+  const ny = embi.y + dy
+  if (isWall(nx, ny)) return
+  embi = { x: nx, y: ny }
+  won = embi.x === goal.x && embi.y === goal.y
+  draw()
+}
+
+window.addEventListener('keydown', (e) => {
+  switch (e.key) {
+    case 'ArrowUp': tryMove(0, -1); break
+    case 'ArrowDown': tryMove(0, 1); break
+    case 'ArrowLeft': tryMove(-1, 0); break
+    case 'ArrowRight': tryMove(1, 0); break
+    default: return
+  }
+  e.preventDefault()
+})
+
+draw()
