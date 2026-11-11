@@ -1,28 +1,25 @@
 import './style.css'
+import { EMBI_FRAMES, EMBI_PALETTE } from './embi'
 
 const TILE = 48
 
-// '#' = rock, '.' = floor, 'E' = Embi's start, 'G' = goal
 const LEVEL: string[] = [
   '##########',
-  '#E.......#',
-  '#..##....#',
+  '#E...#...#',
   '#........#',
-  '#....##..#',
-  '#........#',
-  '#......G.#',
+  '#.#...#..#',
+  '#...##...#',
+  '####.##..#',
+  '#.......G#',
   '##########',
 ]
 
 type Position = { x: number; y: number }
 
+// ================= GAME LOGIC (no drawing here) =================
+
 const rows = LEVEL.length
 const cols = LEVEL[0].length
-
-const canvas = document.getElementById('game') as HTMLCanvasElement
-canvas.width = cols * TILE
-canvas.height = rows * TILE
-const ctx = canvas.getContext('2d')!
 
 function findTile(symbol: string): Position {
   for (let y = 0; y < rows; y++) {
@@ -37,72 +34,126 @@ function isWall(x: number, y: number): boolean {
   return (LEVEL[y]?.[x] ?? '#') === '#'
 }
 
-let embi: Position = findTile('E')
-const goal: Position = findTile('G')
+const start = findTile('E')
+const goal = findTile('G')
+
+let embi: Position = { ...start }
+let moves = 0
 let won = false
 
-function draw(): void {
-  // Map
+function slide(dx: number, dy: number): void {
+  if (won) return
+  let { x, y } = embi
+  while (!isWall(x + dx, y + dy)) {
+    x += dx
+    y += dy
+    if (x === goal.x && y === goal.y) break
+  }
+  if (x === embi.x && y === embi.y) return // blocked: not a move
+  embi = { x, y }
+  moves++
+  won = x === goal.x && y === goal.y
+}
+
+function restart(): void {
+  embi = { ...start }
+  moves = 0
+  won = false
+}
+
+// ================= RENDERING (only this part changes later) =================
+
+const canvas = document.getElementById('game') as HTMLCanvasElement
+canvas.width = cols * TILE
+canvas.height = rows * TILE
+const ctx = canvas.getContext('2d')!
+
+// Pre-render each Embi frame once on a small offscreen canvas
+function makeFrameCanvas(frame: string[]): HTMLCanvasElement {
+  const px = TILE / frame.length
+  const c = document.createElement('canvas')
+  c.width = TILE
+  c.height = TILE
+  const cctx = c.getContext('2d')!
+  frame.forEach((row, y) => {
+    ;[...row].forEach((ch, x) => {
+      if (ch === '.') return
+      cctx.fillStyle = EMBI_PALETTE[ch]
+      cctx.fillRect(x * px, y * px, px, px)
+    })
+  })
+  return c
+}
+const embiFrames = EMBI_FRAMES.map(makeFrameCanvas)
+
+function drawTile(x: number, y: number): void {
+  const px = x * TILE
+  const py = y * TILE
+  if (isWall(x, y)) {
+    ctx.fillStyle = '#4a4a6a'
+    ctx.fillRect(px, py, TILE, TILE)
+    ctx.fillStyle = '#5d5d82'
+    ctx.fillRect(px + 4, py + 4, TILE - 8, 8)
+  } else {
+    ctx.fillStyle = (x + y) % 2 === 0 ? '#cfe8f5' : '#c2e0f0'
+    ctx.fillRect(px, py, TILE, TILE)
+  }
+}
+
+function draw(time: number): void {
   for (let y = 0; y < rows; y++) {
-    for (let x = 0; x < cols; x++) {
-      ctx.fillStyle = isWall(x, y) ? '#4a4a6a' : '#cfe8f5'
-      ctx.fillRect(x * TILE, y * TILE, TILE, TILE)
-    }
+    for (let x = 0; x < cols; x++) drawTile(x, y)
   }
 
-  // Goal
+  // Goal: a yellow diamond
+  const gx = goal.x * TILE + TILE / 2
+  const gy = goal.y * TILE + TILE / 2
   ctx.fillStyle = '#ffd166'
-  ctx.fillRect(goal.x * TILE + 12, goal.y * TILE + 12, TILE - 24, TILE - 24)
-
-  // Embi: orange body with two eyes
-  const px = embi.x * TILE
-  const py = embi.y * TILE
-  ctx.fillStyle = '#ff7a1a'
   ctx.beginPath()
-  ctx.arc(px + TILE / 2, py + TILE / 2, TILE / 2 - 6, 0, Math.PI * 2)
+  ctx.moveTo(gx, gy - 16)
+  ctx.lineTo(gx + 16, gy)
+  ctx.lineTo(gx, gy + 16)
+  ctx.lineTo(gx - 16, gy)
+  ctx.closePath()
   ctx.fill()
 
-  for (const eyeX of [px + 17, px + 31]) {
-    ctx.fillStyle = 'white'
-    ctx.beginPath()
-    ctx.arc(eyeX, py + 20, 5, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.fillStyle = '#222'
-    ctx.beginPath()
-    ctx.arc(eyeX, py + 21, 2.5, 0, Math.PI * 2)
-    ctx.fill()
-  }
+  // Embi: 2 idle frames + a small bounce
+  const frame = embiFrames[Math.floor(time / 400) % embiFrames.length]
+  const bounce = Math.round(Math.sin(time / 200) * 2)
+  ctx.drawImage(frame, embi.x * TILE, embi.y * TILE + bounce)
 
-  // Victory message
+  // HUD
+  ctx.fillStyle = 'white'
+  ctx.font = '14px system-ui, sans-serif'
+  ctx.textAlign = 'left'
+  ctx.fillText(`Moves: ${moves}    R = restart`, 8, 28)
+
   if (won) {
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)'
-    ctx.fillRect(0, canvas.height / 2 - 40, canvas.width, 80)
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.65)'
+    ctx.fillRect(0, canvas.height / 2 - 45, canvas.width, 90)
     ctx.fillStyle = 'white'
-    ctx.font = 'bold 28px system-ui, sans-serif'
     ctx.textAlign = 'center'
-    ctx.fillText('Embi made it!', canvas.width / 2, canvas.height / 2 + 10)
+    ctx.font = 'bold 26px system-ui, sans-serif'
+    ctx.fillText(`Embi made it in ${moves} moves!`, canvas.width / 2, canvas.height / 2)
+    ctx.font = '16px system-ui, sans-serif'
+    ctx.fillText('Press R to play again', canvas.width / 2, canvas.height / 2 + 28)
   }
+
+  requestAnimationFrame(draw)
 }
 
-function tryMove(dx: number, dy: number): void {
-  if (won) return
-  const nx = embi.x + dx
-  const ny = embi.y + dy
-  if (isWall(nx, ny)) return
-  embi = { x: nx, y: ny }
-  won = embi.x === goal.x && embi.y === goal.y
-  draw()
-}
+// ================= INPUT =================
 
 window.addEventListener('keydown', (e) => {
   switch (e.key) {
-    case 'ArrowUp': tryMove(0, -1); break
-    case 'ArrowDown': tryMove(0, 1); break
-    case 'ArrowLeft': tryMove(-1, 0); break
-    case 'ArrowRight': tryMove(1, 0); break
+    case 'ArrowUp': slide(0, -1); break
+    case 'ArrowDown': slide(0, 1); break
+    case 'ArrowLeft': slide(-1, 0); break
+    case 'ArrowRight': slide(1, 0); break
+    case 'r': case 'R': restart(); break
     default: return
   }
   e.preventDefault()
 })
 
-draw()
+requestAnimationFrame(draw)
