@@ -2,8 +2,14 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <meta name="theme-color" content="#0b1626" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icon-180.png" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Embigo" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>Embigo</title>
     <meta name="description" content="A daily 3D sliding puzzle. Guide Embi the fire sprite and Drip the water sprite across icy caves." />
     <meta property="og:type" content="website" />
@@ -19,21 +25,23 @@
   </head>
   <body>
     <canvas id="game"></canvas>
+    <div id="safe-bottom"></div>
 
     <header id="hud">
       <div id="logo">Embi<span>go</span></div>
       <div id="stats">
-        <div><small>Puzzle</small><b id="label">Daily</b></div>
+        <div><small>Puzzle</small><b id="label">-</b></div>
         <div><small>Moves</small><b id="moves">0</b></div>
-        <div><small>Par</small><b id="par">-</b></div>
+        <div><small>Par</small><b id="par">?</b></div>
       </div>
     </header>
 
     <div id="creature"><i id="dot"></i><div><b id="cname"></b><span id="cpower"></span></div></div>
 
+    <div id="pill" class="hidden"></div>
     <div id="toast" class="hidden"></div>
 
-    <div id="intro" class="hidden">
+    <div id="intro" class="overlay hidden">
       <div class="card">
         <h1>Embi<span>go</span></h1>
         <p class="lead">Slide to the glowing diamond. A creature keeps sliding until something stops it.</p>
@@ -42,12 +50,43 @@
           <li><i class="chip fire"></i><span><b>Embi</b> burns bushes. Lakes are walls for Embi.</span></li>
           <li><i class="chip water"></i><span><b>Drip</b> swims across lakes. Bushes are walls for Drip.</span></li>
         </ul>
-        <p class="hint">Arrows, WASD or swipe. Fewer moves is better: can you match the par?</p>
+        <p class="hint">Arrows, WASD or swipe. Campaign levels get harder and harder; two daily puzzles unlock the leaderboard.</p>
         <button id="btn-play">Play</button>
       </div>
     </div>
 
-    <div id="board" class="hidden">
+    <div id="menu" class="overlay hidden">
+      <div class="card">
+        <button id="menu-close" class="close" aria-label="Close">&times;</button>
+        <h2>Play</h2>
+
+        <h3>Daily puzzles</h3>
+        <div class="row">
+          <button id="btn-daily1" class="mode"><b>Daily 1</b><span id="d1-status"></span></button>
+          <button id="btn-daily2" class="mode"><b>Daily 2</b><span id="d2-status"></span></button>
+        </div>
+        <p class="sub">Finish both to see today's leaderboard.</p>
+
+        <h3>Campaign</h3>
+        <button id="btn-campaign" class="mode wide"><b id="camp-label">Start</b><span id="camp-sub"></span></button>
+        <div id="levels"></div>
+
+        <h3>More</h3>
+        <div class="row">
+          <button id="btn-random" class="mode"><b>Random puzzle</b><span>Hints available</span></button>
+          <button id="btn-board" class="mode"><b>Leaderboard</b><span>Daily, top 20</span></button>
+        </div>
+        <div class="row">
+          <button id="btn-hints" class="mode"><b id="hints-label">Hints: on</b><span>Not in daily puzzles</span></button>
+          <button id="btn-help" class="mode"><b>How to play</b><span>The rules</span></button>
+        </div>
+        <div class="row">
+          <button id="btn-vibe" class="mode" hidden><b id="vibe-label">Vibration: on</b><span>Feel your moves</span></button>
+        </div>
+      </div>
+    </div>
+
+    <div id="board" class="overlay hidden">
       <div class="card">
         <button id="board-close" class="close" aria-label="Close">&times;</button>
         <h2>Daily leaderboard</h2>
@@ -55,7 +94,7 @@
         <ol id="board-list"></ol>
 
         <div id="auth-out">
-          <p class="sub">Log in to save your score. Pick a nickname and a 4-digit PIN: no email needed.</p>
+          <p class="sub">Log in to save your scores. Pick a nickname and a 4-digit PIN: no email needed.</p>
           <input id="nick" placeholder="Nickname" maxlength="16" autocomplete="off" autocapitalize="off" spellcheck="false" />
           <input id="pin" placeholder="PIN (4 digits)" type="password" inputmode="numeric" maxlength="4" autocomplete="off" />
           <div class="row">
@@ -73,12 +112,9 @@
     </div>
 
     <footer id="controls">
-      <button id="btn-board">Leaderboard</button>
-      <button id="btn-help">How to play</button>
-      <button id="btn-restart">Restart</button>
-      <button id="btn-new">New puzzle</button>
-      <button id="btn-daily">Daily</button>
-      <p>Arrows / WASD or swipe to slide &middot; R restart &middot; N new &middot; T daily &middot; L leaderboard</p>
+      <button id="btn-menu" aria-label="Menu"><span class="ico">&#9776;</span><span class="lbl">Menu</span></button>
+      <button id="btn-restart" aria-label="Restart"><span class="ico">&#8635;</span><span class="lbl">Restart</span></button>
+      <p>Arrows / WASD or swipe to slide &middot; R restart &middot; M menu &middot; N random &middot; L leaderboard &middot; H hints</p>
     </footer>
 
     <script type="module" src="/src/main.ts"></script>

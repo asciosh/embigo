@@ -50,6 +50,14 @@ export class View {
   private cheerAt = -10
   private time = 0
   private canvas: HTMLCanvasElement
+  private sun: THREE.DirectionalLight
+  private boardCols = 10
+  private boardRows = 8
+  // tall screens (phones in portrait) show the board turned by 90 degrees
+  private portrait = false
+  private coarse = window.matchMedia('(pointer: coarse)').matches
+  private compactQuery = window.matchMedia('(max-width: 700px), (max-height: 520px)')
+  private lastRender = 0
 
   // shared geometry and materials
   private tileGeo = new THREE.BoxGeometry(1, 0.3, 1)
@@ -79,7 +87,7 @@ export class View {
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: !(this.coarse && window.devicePixelRatio >= 2) })
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     this.renderer.shadowMap.enabled = true
     this.renderer.shadowMap.type = THREE.PCFShadowMap
@@ -93,9 +101,10 @@ export class View {
     const hemi = new THREE.HemisphereLight(0xbfe3ff, 0x1a2540, 1.0)
     this.scene.add(hemi)
     const sun = new THREE.DirectionalLight(0xffffff, 1.9)
+    this.sun = sun
     sun.position.set(-5, 11, 7)
     sun.castShadow = true
-    sun.shadow.mapSize.set(2048, 2048)
+    sun.shadow.mapSize.set(this.coarse ? 1024 : 2048, this.coarse ? 1024 : 2048)
     sun.shadow.camera.left = -8
     sun.shadow.camera.right = 8
     sun.shadow.camera.top = 7
@@ -123,7 +132,7 @@ export class View {
     }
 
     // falling snow
-    const count = 260
+    const count = this.coarse ? 140 : 260
     const pos = new Float32Array(count * 3)
     for (let i = 0; i < count; i++) {
       pos[i * 3] = (Math.random() - 0.5) * 16
@@ -132,7 +141,28 @@ export class View {
     }
     const snowGeo = new THREE.BufferGeometry()
     snowGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
-    this.snow = new THREE.Points(snowGeo, new THREE.PointsMaterial({ color: 0xffffff, size: 0.07, transparent: true, opacity: 0.8 }))
+    // round, soft flakes (a small gradient circle used as the point texture)
+    const flake = document.createElement('canvas')
+    flake.width = flake.height = 32
+    const fctx = flake.getContext('2d')!
+    const fgrad = fctx.createRadialGradient(16, 16, 0, 16, 16, 16)
+    fgrad.addColorStop(0, 'rgba(255,255,255,1)')
+    fgrad.addColorStop(0.45, 'rgba(255,255,255,0.7)')
+    fgrad.addColorStop(1, 'rgba(255,255,255,0)')
+    fctx.fillStyle = fgrad
+    fctx.fillRect(0, 0, 32, 32)
+    this.snow = new THREE.Points(
+      snowGeo,
+      new THREE.PointsMaterial({
+        map: new THREE.CanvasTexture(flake),
+        color: 0xffffff,
+        size: 4 * Math.min(window.devicePixelRatio, 2),
+        sizeAttenuation: false,
+        transparent: true,
+        opacity: 0.85,
+        depthWrite: false,
+      }),
+    )
     this.scene.add(this.snow)
 
     window.addEventListener('resize', () => this.resize())
@@ -145,10 +175,29 @@ export class View {
     const h = this.canvas.clientHeight || window.innerHeight
     this.renderer.setSize(w, h, false)
     this.camera.aspect = w / h
-    // wider field of view on tall (phone) screens, and enough distance to fit the board width
-    this.camera.fov = this.camera.aspect < 1 ? 55 : 38
+
+    // Tall screens show the board turned by 90 degrees: its long side runs up and down the
+    // screen, so the tiles come out much bigger. Turning the phone rebuilds the level.
+    const portrait = this.camera.aspect < 1
+    if (portrait !== this.portrait) {
+      this.portrait = portrait
+      if (this.game) {
+        this.finishTween()
+        this.setLevel(this.game) // calls resize() again with the new orientation
+        return
+      }
+    }
+
+    if (portrait || this.compactQuery.matches) this.fitToScreen(w, h)
+    else this.classicFit()
+  }
+
+  // The original framing, used on desktop (unchanged)
+  private classicFit(): void {
+    this.camera.fov = 38
     const tanHalf = Math.tan((this.camera.fov * Math.PI) / 360)
-    const dist = Math.max(12, 11.4 / (2 * tanHalf * this.camera.aspect))
+    const sizeFactor = Math.max(this.boardCols / 10, this.boardRows / 8) // 1 for the original 10x8 board
+    const dist = Math.max(12 * sizeFactor, (this.boardCols + 1.4) / (2 * tanHalf * this.camera.aspect))
     const pitch = (57 * Math.PI) / 180
     this.camera.position.set(0, dist * Math.sin(pitch), dist * Math.cos(pitch) + 0.4)
     const fog = this.scene.fog as THREE.Fog
@@ -158,14 +207,121 @@ export class View {
     this.camera.updateProjectionMatrix()
   }
 
+  // Space taken by the interface at the top and at the bottom of the screen, in pixels
+  private uiInsets(h: number): { top: number; bottom: number } {
+    let top = 6
+    let bottom = 6
+    for (const id of ['hud', 'creature', 'controls']) {
+      const el = document.getElementById(id)
+      if (!el) continue
+      const r = el.getBoundingClientRect()
+      if (r.height === 0) continue
+      if (r.top + r.height / 2 < h / 2) top = Math.max(top, r.bottom + 6)
+      else bottom = Math.max(bottom, h - r.top + 6)
+    }
+    const safe = document.getElementById('safe-bottom')
+    if (safe) bottom = Math.max(bottom, safe.offsetHeight + 8)
+    return { top, bottom }
+  }
+
+  // Phones: zoom in as much as possible while the whole board stays inside the free area
+  // between the top bar and the bottom of the screen, and center it there.
+  private fitToScreen(w: number, h: number): void {
+    const insets = this.uiInsets(h)
+    const worldW = this.portrait ? this.boardRows : this.boardCols
+    const worldD = this.portrait ? this.boardCols : this.boardRows
+    const halfX = worldW / 2 + 0.25
+    const halfZ = worldD / 2 + 0.25
+
+    this.camera.fov = this.portrait ? 42 : 38
+    this.camera.updateProjectionMatrix()
+    const pitch = ((this.portrait ? 62 : 57) * Math.PI) / 180
+    const topN = 1 - (2 * insets.top) / h
+    const botN = -1 + (2 * insets.bottom) / h
+    const sideN = 1 - (2 * 6) / w
+
+    const corners: THREE.Vector3[] = []
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        for (const y of [0, 1.1]) corners.push(new THREE.Vector3(sx * halfX, y, sz * halfZ))
+      }
+    }
+
+    const place = (dist: number, shift: number) => {
+      this.camera.position.set(0, dist * Math.sin(pitch), shift + dist * Math.cos(pitch))
+      this.camera.lookAt(0, 0, shift)
+      this.camera.updateMatrixWorld(true)
+    }
+    const measure = (dist: number, shift: number) => {
+      place(dist, shift)
+      let minX = Infinity
+      let maxX = -Infinity
+      let minY = Infinity
+      let maxY = -Infinity
+      for (const c of corners) {
+        const v = c.clone().project(this.camera)
+        minX = Math.min(minX, v.x)
+        maxX = Math.max(maxX, v.x)
+        minY = Math.min(minY, v.y)
+        maxY = Math.max(maxY, v.y)
+      }
+      return { minX, maxX, minY, maxY }
+    }
+
+    let dist = 14
+    let shift = 0
+    for (let i = 0; i < 10; i++) {
+      const b = measure(dist, shift)
+      const needW = (b.maxX - b.minX) / (2 * sideN)
+      const needH = (b.maxY - b.minY) / (topN - botN)
+      dist = Math.min(60, Math.max(7, dist * Math.max(needW, needH)))
+
+      const a = measure(dist, shift)
+      const center = (a.minY + a.maxY) / 2
+      const probe = measure(dist, shift + 0.5)
+      const slope = ((probe.minY + probe.maxY) / 2 - center) / 0.5
+      if (Math.abs(slope) > 1e-4) shift += ((topN + botN) / 2 - center) / slope
+    }
+
+    place(dist, shift)
+    const fog = this.scene.fog as THREE.Fog
+    fog.near = dist * 1.3
+    fog.far = dist * 3.2
+    this.camera.updateProjectionMatrix()
+  }
+
+  get isPortrait(): boolean {
+    return this.portrait
+  }
+
+  private finishTween(): void {
+    if (!this.tween) return
+    const done = this.tween.resolve
+    this.tween = null
+    done()
+  }
+
   private cell(p: Pos): THREE.Vector3 {
     const g = this.game!
-    return new THREE.Vector3(p.x - (g.cols - 1) / 2, 0, p.y - (g.rows - 1) / 2)
+    const cx = p.x - (g.cols - 1) / 2
+    const cy = p.y - (g.rows - 1) / 2
+    // portrait: game x runs down the screen and game y runs across it
+    return this.portrait ? new THREE.Vector3(cy, 0, cx) : new THREE.Vector3(cx, 0, cy)
   }
 
   // (Re)build the whole level from the game state
   setLevel(game: Game): void {
     this.game = game
+    this.boardCols = game.cols
+    this.boardRows = game.rows
+    const sh = this.sun.shadow.camera
+    const span = Math.max(game.cols, game.rows) / 2 + 2
+    sh.left = -span
+    sh.right = span
+    sh.top = span
+    sh.bottom = -span
+    sh.updateProjectionMatrix()
+    this.resize()
     this.scene.remove(this.levelGroup)
     this.levelGroup = new THREE.Group()
     this.scene.add(this.levelGroup)
@@ -181,10 +337,12 @@ export class View {
         const p = this.cell({ x, y })
         const border = x === 0 || y === 0 || x === game.cols - 1 || y === game.rows - 1
         const n = x * 31 + y * 17
+        const backEdge = this.portrait ? x === 0 : y === 0
+        const frontEdge = this.portrait ? x === game.cols - 1 : y === game.rows - 1
 
         if (t === '#') {
           const scale = border ? 0.95 : 0.82
-          const tall = border ? (y === 0 ? 0.75 : y === game.rows - 1 ? 0.5 : 1.15) : 1
+          const tall = border ? (backEdge ? 0.75 : frontEdge ? 0.5 : 1.15) : 1
           if (!border) this.addTile(p, x, y)
           const rock = new THREE.Mesh(this.rockGeo, this.rockMats[Math.floor(hash(n) * 2)])
           rock.scale.set((0.95 + hash(n + 1) * 0.3) * scale, (0.8 + hash(n + 2) * 0.6) * scale * tall, (0.95 + hash(n + 3) * 0.3) * scale)
@@ -290,6 +448,14 @@ export class View {
     })
   }
 
+  // Little burst around the creature: green-gold for a best move, grey for a dead end
+  sparkle(kind: 'good' | 'bad'): void {
+    if (!this.model) return
+    const at = this.model.group.position.clone().setY(0.7)
+    if (kind === 'good') this.burst(at, 16, [0x7dffb0, 0xffd166, 0xffffff], 2.4, -0.6)
+    else this.burst(at, 12, [0x8d99a6, 0x5b6190, 0xff8f8f], 1.8, 2)
+  }
+
   celebrate(): void {
     if (!this.game) return
     this.cheerAt = this.time
@@ -313,7 +479,17 @@ export class View {
     }
   }
 
+  // True when nothing is moving: on touch devices we then draw fewer frames to save battery
+  private isIdle(): boolean {
+    return !this.tween && this.burning.length === 0 && this.time - this.cheerAt > 1.5 && !this.sparks.some((sp) => sp.life > 0)
+  }
+
   private frame(ms: number): void {
+    if (this.coarse && this.isIdle() && ms - this.lastRender < 30) {
+      requestAnimationFrame((next) => this.frame(next))
+      return
+    }
+    this.lastRender = ms
     const t = ms / 1000
     const dt = Math.min(0.05, Math.max(0, t - this.time))
     this.time = t

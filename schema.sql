@@ -14,16 +14,18 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at INTEGER NOT NULL
 );
 
+-- two puzzles per day: idx 1 and idx 2
 CREATE TABLE IF NOT EXISTS scores (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   player_id INTEGER NOT NULL,
   day INTEGER NOT NULL,
+  idx INTEGER NOT NULL,
   moves INTEGER NOT NULL,
   par INTEGER NOT NULL,
   creature TEXT NOT NULL,
   solution TEXT NOT NULL,
   created_at INTEGER NOT NULL,
-  UNIQUE (player_id, day)
+  UNIQUE (player_id, day, idx)
 );
 
-CREATE INDEX IF NOT EXISTS idx_scores_day ON scores (day, moves, created_at);
+CREATE INDEX IF NOT EXISTS idx_scores_day ON scores (day, player_id);

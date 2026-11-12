@@ -1,7 +1,15 @@
 export type Session = { token: string; nickname: string }
-export type BoardRow = { nickname: string; moves: number }
-export type Board = { day: number; par: number; creature: 'fire' | 'water'; scores: BoardRow[] }
-export type ScoreResult = { moves: number; par: number; rank: number; improved: boolean }
+export type BoardRow = { nickname: string; total: number; m1: number; m2: number }
+// locked = true until the viewer has finished both daily puzzles of that day
+export type Board = { day: number; locked: boolean; players: number; scores: BoardRow[] }
+export type ScoreResult = {
+  moves: number
+  par: number
+  improved: boolean
+  done: number // how many of the two daily puzzles this player has finished
+  total: number | null // total moves of the day, once both are finished
+  rank: number | null
+}
 
 const SESSION_KEY = 'embigo-session'
 
@@ -73,7 +81,7 @@ export const login = (nickname: string, pin: string) => call<Session>('/api/logi
 
 export const logout = (token: string) => call<{ ok: boolean }>('/api/logout', { method: 'POST', token })
 
-export const submitScore = (day: number, moves: string, token: string) =>
-  call<ScoreResult>('/api/score', { method: 'POST', body: { day, moves }, token })
+export const submitScore = (day: number, idx: 1 | 2, moves: string, token: string) =>
+  call<ScoreResult>('/api/score', { method: 'POST', body: { day, idx, moves }, token })
 
-export const fetchLeaderboard = (day: number) => call<Board>(`/api/leaderboard?day=${day}`)
+export const fetchLeaderboard = (day: number, token?: string) => call<Board>(`/api/leaderboard?day=${day}`, { token })

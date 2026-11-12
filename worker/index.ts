@@ -1,5 +1,5 @@
 import { dayNumber } from '../src/generator'
-import { getDailyPuzzle } from '../src/puzzles'
+import { getDailyPuzzles } from '../src/puzzles'
 import { Game, type Dir } from '../src/game'
 
 type Env = {
@@ -145,22 +145,24 @@ async function logout(request: Request, env: Env): Promise<Response> {
   return json({ ok: true })
 }
 
-// The client sends the list of moves, e.g. "RDLLDL". The server replays them on the
-// real puzzle of that day, so nobody can invent a score.
+// The client sends the list of moves, e.g. "RDLLDL", for puzzle 1 or 2 of a day. The server
+// replays them on the real puzzle, so nobody can invent a score.
 async function submitScore(request: Request, env: Env): Promise<Response> {
   const player = await authenticate(request, env)
   if (!player) return fail('Please log in again', 401)
 
   const body = await readBody(request)
   const day = typeof body?.day === 'number' ? body.day : 0
+  const idx = body?.idx === 1 || body?.idx === 2 ? body.idx : 0
   const moves = typeof body?.moves === 'string' ? body.moves : ''
-  if (!/^[UDLR]{1,80}$/.test(moves)) return fail('Invalid moves')
+  if (!idx) return fail('Invalid puzzle')
+  if (!/^[UDLR]{1,300}$/.test(moves)) return fail('Invalid moves')
 
   const yesterday = new Date()
   yesterday.setUTCDate(yesterday.getUTCDate() - 1)
   if (day !== dayNumber() && day !== dayNumber(yesterday)) return fail('That puzzle is closed')
 
-  const puzzle = getDailyPuzzle(day)
+  const puzzle = getDailyPuzzles(day)[idx - 1]
   const game = new Game(puzzle.rows, puzzle.creature)
   for (const ch of moves) {
     if (!game.move(ch as Dir)) return fail('Those moves do not match this puzzle')
@@ -168,52 +170,91 @@ async function submitScore(request: Request, env: Env): Promise<Response> {
   if (!game.won) return fail('Those moves do not solve this puzzle')
 
   const now = Date.now()
-  const existing = await env.DB.prepare('SELECT moves FROM scores WHERE player_id = ? AND day = ?')
-    .bind(player.id, day)
+  const existing = await env.DB.prepare('SELECT moves FROM scores WHERE player_id = ? AND day = ? AND idx = ?')
+    .bind(player.id, day, idx)
     .first<{ moves: number }>()
 
   let improved = false
   if (!existing) {
     await env.DB.prepare(
-      'INSERT INTO scores (player_id, day, moves, par, creature, solution, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO scores (player_id, day, idx, moves, par, creature, solution, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     )
-      .bind(player.id, day, game.moves, puzzle.moves, puzzle.creature, moves, now)
+      .bind(player.id, day, idx, game.moves, puzzle.moves, puzzle.creature, moves, now)
       .run()
     improved = true
   } else if (game.moves < existing.moves) {
     await env.DB.prepare(
-      'UPDATE scores SET moves = ?, solution = ?, created_at = ? WHERE player_id = ? AND day = ?',
+      'UPDATE scores SET moves = ?, solution = ?, created_at = ? WHERE player_id = ? AND day = ? AND idx = ?',
     )
-      .bind(game.moves, moves, now, player.id, day)
+      .bind(game.moves, moves, now, player.id, day, idx)
       .run()
     improved = true
   }
 
-  const mine = await env.DB.prepare('SELECT moves, created_at FROM scores WHERE player_id = ? AND day = ?')
-    .bind(player.id, day)
-    .first<{ moves: number; created_at: number }>()
-  const ahead = await env.DB.prepare(
-    'SELECT COUNT(*) AS n FROM scores WHERE day = ? AND (moves < ? OR (moves = ? AND created_at < ?))',
+  const mine = await env.DB.prepare(
+    'SELECT COUNT(*) AS done, SUM(moves) AS total, MAX(created_at) AS finished FROM scores WHERE player_id = ? AND day = ?',
   )
-    .bind(day, mine!.moves, mine!.moves, mine!.created_at)
-    .first<{ n: number }>()
+    .bind(player.id, day)
+    .first<{ done: number; total: number | null; finished: number | null }>()
 
-  return json({ moves: mine!.moves, par: puzzle.moves, rank: (ahead?.n ?? 0) + 1, improved })
+  const done = mine?.done ?? 0
+  const bestHere = existing && !improved ? existing.moves : game.moves
+  let total: number | null = null
+  let rank: number | null = null
+  if (done === 2 && mine?.total != null && mine.finished != null) {
+    total = mine.total
+    const ahead = await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM (SELECT SUM(moves) AS total, MAX(created_at) AS finished FROM scores WHERE day = ? GROUP BY player_id HAVING COUNT(*) = 2) WHERE total < ? OR (total = ? AND finished < ?)',
+    )
+      .bind(day, total, total, mine.finished)
+      .first<{ n: number }>()
+    rank = (ahead?.n ?? 0) + 1
+  }
+
+  return json({ moves: bestHere, par: puzzle.moves, improved, done, total, rank })
 }
 
+// Scores of a day, ranked by total moves over both puzzles. They stay hidden until the viewer
+// has finished both puzzles of that day too, so nobody sees them before playing.
 async function leaderboard(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url)
   const asked = Number(url.searchParams.get('day'))
   const day = Number.isInteger(asked) && asked > 20200101 && asked < 21000101 ? asked : dayNumber()
-  const puzzle = getDailyPuzzle(day)
 
-  const { results } = await env.DB.prepare(
-    'SELECT p.nickname AS nickname, s.moves AS moves FROM scores s JOIN players p ON p.id = s.player_id WHERE s.day = ? ORDER BY s.moves ASC, s.created_at ASC LIMIT 20',
+  const finishedSets = await env.DB.prepare(
+    'SELECT COUNT(*) AS n FROM (SELECT player_id FROM scores WHERE day = ? GROUP BY player_id HAVING COUNT(*) = 2)',
   )
     .bind(day)
-    .all<{ nickname: string; moves: number }>()
+    .first<{ n: number }>()
+  const players = finishedSets?.n ?? 0
 
-  return json({ day, par: puzzle.moves, creature: puzzle.creature, scores: results })
+  const viewer = await authenticate(request, env)
+  let unlocked = false
+  if (viewer) {
+    const mine = await env.DB.prepare('SELECT COUNT(*) AS n FROM scores WHERE player_id = ? AND day = ?')
+      .bind(viewer.id, day)
+      .first<{ n: number }>()
+    unlocked = (mine?.n ?? 0) >= 2
+  }
+  if (!unlocked) return json({ day, locked: true, players, scores: [] })
+
+  const { results } = await env.DB.prepare(
+    `SELECT p.nickname AS nickname,
+            SUM(s.moves) AS total,
+            MAX(CASE WHEN s.idx = 1 THEN s.moves END) AS m1,
+            MAX(CASE WHEN s.idx = 2 THEN s.moves END) AS m2,
+            MAX(s.created_at) AS finished
+     FROM scores s JOIN players p ON p.id = s.player_id
+     WHERE s.day = ?
+     GROUP BY s.player_id
+     HAVING COUNT(*) = 2
+     ORDER BY total ASC, finished ASC
+     LIMIT 20`,
+  )
+    .bind(day)
+    .all<{ nickname: string; total: number; m1: number; m2: number }>()
+
+  return json({ day, locked: false, players, scores: results })
 }
 
 // ---------- entry point ----------

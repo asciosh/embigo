@@ -1,4 +1,4 @@
-import type { Creature } from './generator'
+import { remainingMoves, type Creature } from './generator'
 
 export type Pos = { x: number; y: number }
 export type Dir = 'U' | 'D' | 'L' | 'R'
@@ -10,7 +10,17 @@ const DELTA: Record<Dir, [number, number]> = {
   R: [1, 0],
 }
 
-export type MoveResult = { dir: Dir; from: Pos; to: Pos; burned: Pos | null; won: boolean }
+export type MoveResult = {
+  dir: Dir
+  from: Pos
+  to: Pos
+  burned: Pos | null
+  won: boolean
+  // Only when move tracking is on: was this move on a shortest path to the goal?
+  optimal: boolean | null
+  // Only when move tracking is on: can the goal still be reached from here?
+  deadEnd: boolean
+}
 
 // Pure game rules: no drawing, no browser APIs.
 // The same code can later run on the server to verify leaderboard scores.
@@ -25,6 +35,10 @@ export class Game {
   moves = 0
   won = false
   history: Dir[] = []
+  // Moves left on the shortest path to the goal (only when tracking is on).
+  // null means the goal can no longer be reached.
+  remaining: number | null = null
+  private tracking = false
   private burnt = new Set<string>()
 
   constructor(level: string[], creature: Creature) {
@@ -44,6 +58,17 @@ export class Game {
       }
     }
     throw new Error(`Tile ${symbol} not found`)
+  }
+
+  // Turn the "is this the best move?" tracking on or off (the server never needs it)
+  setTracking(on: boolean): void {
+    this.tracking = on
+    this.remaining = on ? this.computeRemaining() : null
+  }
+
+  private computeRemaining(): number | null {
+    if (this.won) return 0
+    return remainingMoves(this.level, this.creature, this.pos, this.burnt)
   }
 
   tile(x: number, y: number): string {
@@ -93,7 +118,16 @@ export class Game {
     this.moves++
     this.won = atGoal
     this.history.push(dir)
-    return { dir, from, to: { x, y }, burned, won: atGoal }
+
+    let optimal: boolean | null = null
+    let deadEnd = false
+    if (this.tracking) {
+      const before = this.remaining
+      this.remaining = this.computeRemaining()
+      optimal = before !== null && this.remaining !== null && this.remaining === before - 1
+      deadEnd = this.remaining === null
+    }
+    return { dir, from, to: { x, y }, burned, won: atGoal, optimal, deadEnd }
   }
 
   restart(): void {
@@ -102,5 +136,6 @@ export class Game {
     this.won = false
     this.history = []
     this.burnt.clear()
+    this.remaining = this.tracking ? this.computeRemaining() : null
   }
 }

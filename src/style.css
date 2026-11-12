@@ -209,8 +209,7 @@ body {
   }
 }
 
-#intro,
-#board {
+.overlay {
   position: fixed;
   inset: 0;
   display: flex;
@@ -224,14 +223,12 @@ body {
   z-index: 10;
 }
 
-#intro.hidden,
-#board.hidden {
+.overlay.hidden {
   opacity: 0;
   pointer-events: none;
 }
 
-#intro .card,
-#board .card {
+.overlay .card {
   width: min(440px, 100%);
   padding: 26px 24px 22px;
   text-align: center;
@@ -324,26 +321,26 @@ input {
   -webkit-user-select: text;
 }
 
-#board .card {
+.overlay .card {
   position: relative;
   max-height: 92vh;
   overflow-y: auto;
   touch-action: pan-y;
 }
 
-#board h2 {
+.overlay h2 {
   margin: 0 0 4px;
   font-size: 24px;
   color: var(--accent);
 }
 
-#board .sub {
+.overlay .sub {
   margin: 0 0 12px;
   font-size: 13px;
   color: var(--muted);
 }
 
-#board .close {
+.overlay .close {
   position: absolute;
   top: 10px;
   right: 12px;
@@ -424,13 +421,13 @@ input {
   border-color: var(--accent);
 }
 
-#board .row {
+.overlay .row {
   display: flex;
   gap: 8px;
   margin-top: 4px;
 }
 
-#board .row button,
+.overlay .row button,
 #btn-logout,
 #toast button {
   flex: 1;
@@ -465,4 +462,343 @@ input {
 #auth-out.hidden,
 #auth-in.hidden {
   display: none;
+}
+
+/* ---------- menu ---------- */
+.overlay h3 {
+  margin: 14px 0 8px;
+  font-size: 12px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+  text-align: left;
+}
+
+.mode {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  background: rgba(160, 205, 255, 0.1);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+
+.mode b {
+  font-size: 15px;
+}
+
+.mode span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.mode:hover {
+  border-color: var(--accent);
+}
+
+.mode.wide {
+  width: 100%;
+}
+
+.mode.done b::after {
+  content: ' \2713';
+  color: #7dffb0;
+}
+
+#levels {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.lvl {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  background: rgba(160, 205, 255, 0.1);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 6px 0 3px;
+  cursor: pointer;
+  line-height: 1.1;
+}
+
+.lvl small {
+  display: block;
+  font-size: 8px;
+  letter-spacing: 0;
+  color: var(--accent);
+  min-height: 9px;
+}
+
+.lvl.current {
+  border-color: var(--accent);
+  box-shadow: 0 0 10px rgba(255, 209, 102, 0.35);
+}
+
+.lvl:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+@media (max-width: 560px) {
+  #levels {
+    grid-template-columns: repeat(6, 1fr);
+  }
+}
+
+/* ---------- feedback pill and toast actions ---------- */
+#pill {
+  position: fixed;
+  left: 50%;
+  top: calc(env(safe-area-inset-top, 0px) + 74px);
+  transform: translateX(-50%);
+  padding: 8px 18px;
+  font-weight: 800;
+  font-size: 15px;
+  border-radius: 999px;
+  pointer-events: none;
+  transition: opacity 0.25s, transform 0.25s;
+}
+
+#pill.good {
+  color: #06210f;
+  background: linear-gradient(180deg, #9dffc0, #4be08a);
+  box-shadow: 0 6px 22px rgba(75, 224, 138, 0.45);
+}
+
+#pill.bad {
+  color: #2a0808;
+  background: linear-gradient(180deg, #ffb0b0, #ff7a7a);
+  box-shadow: 0 6px 22px rgba(255, 122, 122, 0.4);
+}
+
+#pill.hidden {
+  opacity: 0;
+  transform: translate(-50%, -10px);
+}
+
+#toast .actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 12px;
+}
+
+#toast .actions button {
+  margin-top: 0;
+}
+
+#toast .actions button.primary {
+  color: #1b0e00;
+  background: linear-gradient(180deg, #ffd166, #ff9a1a);
+  border: none;
+}
+
+#toast .stars {
+  display: block;
+  margin-top: 6px;
+  font-size: 26px;
+  letter-spacing: 4px;
+  color: var(--accent);
+}
+
+#board-list .detail {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+#board .locked {
+  text-align: center;
+  color: var(--muted);
+  padding: 14px 6px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* ---------- phones and small screens ---------- */
+html,
+body {
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body,
+#game {
+  height: 100%;
+  height: 100dvh;
+}
+
+button {
+  touch-action: manipulation;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+#safe-bottom {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: env(safe-area-inset-bottom, 0px);
+  pointer-events: none;
+}
+
+#controls .ico {
+  display: none;
+}
+
+@media (max-width: 700px), (max-height: 520px) {
+  #logo {
+    display: none;
+  }
+
+  /* top bar: [menu] [puzzle / moves / par] [restart] */
+  #hud {
+    justify-content: center;
+    padding: calc(env(safe-area-inset-top, 0px) + 10px) 64px 0;
+  }
+
+  #stats {
+    gap: 6px;
+  }
+
+  #stats div {
+    min-width: 58px;
+    padding: 4px 8px;
+    border-radius: 12px;
+  }
+
+  #stats b {
+    font-size: 16px;
+  }
+
+  #controls {
+    top: calc(env(safe-area-inset-top, 0px) + 10px);
+    bottom: auto;
+    left: 10px;
+    right: 10px;
+    padding: 0;
+    flex-wrap: nowrap;
+    justify-content: space-between;
+    pointer-events: none;
+  }
+
+  #controls button {
+    pointer-events: auto;
+    width: 46px;
+    height: 46px;
+    padding: 0;
+    font-size: 22px;
+    border-radius: 14px;
+  }
+
+  #controls .lbl,
+  #controls p {
+    display: none;
+  }
+
+  #controls .ico {
+    display: inline;
+  }
+
+  /* creature chip under the top bar */
+  #creature {
+    left: 50%;
+    transform: translateX(-50%);
+    top: calc(env(safe-area-inset-top, 0px) + 64px);
+    padding: 4px 14px 4px 10px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+
+  #creature div {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 6px;
+  }
+
+  #creature b {
+    font-size: 13px;
+  }
+
+  #creature span {
+    font-size: 11px;
+  }
+
+  #pill {
+    top: calc(env(safe-area-inset-top, 0px) + 104px);
+  }
+
+  /* result message as a sheet at the bottom, within thumb reach */
+  #toast {
+    top: auto;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
+    left: 12px;
+    right: 12px;
+    transform: none;
+    padding: 16px 18px;
+  }
+
+  #toast.hidden {
+    transform: translateY(24px);
+  }
+
+  #toast .actions button,
+  #toast button {
+    flex: 1;
+    min-height: 48px;
+    font-size: 16px;
+  }
+
+  /* windows as bottom sheets */
+  .overlay {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .overlay .card {
+    width: 100%;
+    max-height: 92vh;
+    max-height: 92dvh;
+    border-radius: 22px 22px 0 0;
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 18px);
+  }
+
+  .mode {
+    min-height: 58px;
+  }
+
+  #levels {
+    grid-template-columns: repeat(6, 1fr);
+    gap: 8px;
+  }
+
+  .lvl {
+    padding: 11px 0 6px;
+    font-size: 15px;
+  }
+
+  .overlay .row button,
+  #btn-logout,
+  #btn-login,
+  #btn-register {
+    min-height: 48px;
+  }
+
+  #btn-play {
+    width: 100%;
+    min-height: 52px;
+  }
 }

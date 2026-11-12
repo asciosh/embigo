@@ -1,11 +1,23 @@
-export const W = 10
-export const H = 8
+// Level generator and solver. Everything here is deterministic: the same seed gives the
+// same level in every browser and on the server.
 
-// How many moves the generator aims for (the real par can be a little higher)
-export const TARGET_MOVES = 6
+export type Creature = 'fire' | 'water'
+export type GeneratedLevel = { rows: string[]; moves: number; creature: Creature }
 
-// Small seeded random number generator: same seed -> same sequence
-// (like new Random(seed) in C#)
+// Tiles in the text format: '#' rock, '.' ice, 'B' bush, 'L' lake, 'E' start, 'G' goal
+//  - everybody is stopped by rocks
+//  - fire creature (Embi): burns bushes (stops in front, the bush disappears), lakes are walls
+//  - water creature (Drip): slides across lakes, bushes are walls
+//  - creature = null: no powers (used to check that the powers really matter)
+
+const ICE = 0
+const ROCK = 1
+const BUSH = 2
+const LAKE = 3
+const SYMBOLS = ['.', '#', 'B', 'L']
+
+type Layout = { w: number; h: number; tiles: Uint8Array; start: number; goal: number }
+
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0
   return () => {
@@ -17,81 +29,221 @@ function mulberry32(seed: number): () => number {
   }
 }
 
-export type Creature = 'fire' | 'water'
-
-type Cell = { x: number; y: number }
-type State = { x: number; y: number; mask: number }
-
-// Tiles: '#' rock, '.' ice, 'B' bush, 'L' lake, 'E' start, 'G' goal
-//  - everybody is stopped by rocks
-//  - fire creature: burns bushes (stops in front, bush disappears), lakes are walls
-//  - water creature: slides across lakes, bushes are walls
-//  - creature = null: no powers (used to check that the obstacles matter)
-// Returns the minimum number of moves to reach the goal, or null if unsolvable.
-export function solveLevel(rows: string[], creature: Creature | null): number | null {
-  const canBurn = creature === 'fire'
-  const canSwim = creature === 'water'
-  const grid = rows.map((r) => [...r])
-  let start: Cell = { x: 0, y: 0 }
-  let goal: Cell = { x: 0, y: 0 }
-  const bushBit = new Map<number, number>() // bush cell -> its bit in the "burnt" mask
-  let bushCount = 0
-
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      const ch = grid[y][x]
-      if (ch === 'E') start = { x, y }
-      if (ch === 'G') goal = { x, y }
-      if (ch === 'B') bushBit.set(y * W + x, 1 << bushCount++)
+function parse(rows: string[]): Layout {
+  const h = rows.length
+  const w = rows[0].length
+  const tiles = new Uint8Array(w * h)
+  let start = 0
+  let goal = 0
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const ch = rows[y][x]
+      const i = y * w + x
+      if (ch === '#') tiles[i] = ROCK
+      else if (ch === 'B') tiles[i] = BUSH
+      else if (ch === 'L') tiles[i] = LAKE
+      else if (ch === 'E') start = i
+      else if (ch === 'G') goal = i
     }
   }
+  return { w, h, tiles, start, goal }
+}
 
-  const stateKey = (s: State) => (s.mask * H + s.y) * W + s.x
-  const first: State = { ...start, mask: 0 }
-  const dist = new Map<number, number>([[stateKey(first), 0]])
-  const queue: State[] = [first]
-  const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+function toRows(l: Layout): string[] {
+  const rows: string[] = []
+  for (let y = 0; y < l.h; y++) {
+    let r = ''
+    for (let x = 0; x < l.w; x++) {
+      const i = y * l.w + x
+      r += i === l.start ? 'E' : i === l.goal ? 'G' : SYMBOLS[l.tiles[i]]
+    }
+    rows.push(r)
+  }
+  return rows
+}
 
-  for (let i = 0; i < queue.length; i++) {
-    const cur = queue[i]
-    const d = dist.get(stateKey(cur))!
-    if (cur.x === goal.x && cur.y === goal.y) return d
+// Minimum number of moves from a position (and a set of already burnt bushes) to the goal,
+// or null if the goal cannot be reached. Breadth-first search over (position, burnt bushes).
+function solveLayout(l: Layout, creature: Creature | null, from: number, burntMask: number): number | null {
+  const { w, h, tiles, goal } = l
+  const cells = w * h
+  const canBurn = creature === 'fire'
+  const canSwim = creature === 'water'
+  const bushBit = new Int8Array(cells).fill(-1)
+  let bushCount = 0
+  for (let i = 0; i < cells; i++) if (tiles[i] === BUSH) bushBit[i] = bushCount++
+  const masks = 1 << bushCount
+  const dist = new Int16Array(cells * masks).fill(-1)
+  const queue = new Int32Array(cells * masks)
+  const first = burntMask * cells + from
+  dist[first] = 0
+  let head = 0
+  let tail = 0
+  queue[tail++] = first
+  const steps = [1, -1, w, -w]
 
-    for (const [dx, dy] of dirs) {
-      let { x, y } = cur
-      let mask = cur.mask
-      const blocked = (bx: number, by: number) => {
-        const ch = grid[by][bx]
-        if (ch === '#') return true
-        if (ch === 'L') return !canSwim
-        if (ch === 'B') return (mask & bushBit.get(by * W + bx)!) === 0
-        return false
+  while (head < tail) {
+    const s = queue[head++]
+    const mask = Math.floor(s / cells)
+    const cell = s - mask * cells
+    const d = dist[s]
+    if (cell === goal) return d
+
+    for (let k = 0; k < 4; k++) {
+      const step = steps[k]
+      let pos = cell
+      for (;;) {
+        const next = pos + step
+        const t = tiles[next]
+        if (t === ROCK) break
+        if (t === LAKE && !canSwim) break
+        if (t === BUSH && (mask & (1 << bushBit[next])) === 0) break
+        pos = next
+        if (pos === goal) break
       }
-
-      while (!blocked(x + dx, y + dy)) {
-        x += dx
-        y += dy
-        if (x === goal.x && y === goal.y) break
+      let nextMask = mask
+      if (canBurn && pos !== goal) {
+        const next = pos + step
+        if (tiles[next] === BUSH && (mask & (1 << bushBit[next])) === 0) nextMask = mask | (1 << bushBit[next])
       }
-
-      const atGoal = x === goal.x && y === goal.y
-      if (canBurn && !atGoal && grid[y + dy][x + dx] === 'B') {
-        mask |= bushBit.get((y + dy) * W + (x + dx))!
-      }
-
-      const next: State = { x, y, mask }
-      if (!dist.has(stateKey(next))) {
-        dist.set(stateKey(next), d + 1)
-        queue.push(next)
+      if (pos === cell && nextMask === mask) continue
+      const ns = nextMask * cells + pos
+      if (dist[ns] < 0) {
+        dist[ns] = d + 1
+        queue[tail++] = ns
       }
     }
   }
   return null
 }
 
-export type GeneratedLevel = { rows: string[]; moves: number; creature: Creature }
+export function solveRows(rows: string[], creature: Creature | null): number | null {
+  const l = parse(rows)
+  return solveLayout(l, creature, l.start, 0)
+}
 
-// A hand-made level used only if the generator ever fails
+// Moves left on the shortest path from a position, given the bushes burnt so far.
+export function remainingMoves(
+  rows: string[],
+  creature: Creature,
+  pos: { x: number; y: number },
+  burnt: Iterable<string>,
+): number | null {
+  const l = parse(rows)
+  let bit = 0
+  let mask = 0
+  const burntSet = new Set(burnt)
+  for (let i = 0; i < l.w * l.h; i++) {
+    if (l.tiles[i] !== BUSH) continue
+    if (burntSet.has(`${i % l.w},${Math.floor(i / l.w)}`)) mask |= 1 << bit
+    bit++
+  }
+  return solveLayout(l, creature, pos.y * l.w + pos.x, mask)
+}
+
+// ---------- generation ----------
+
+export type Spec = { w: number; h: number; rocks: number; bushes: number; lakes: number; par: number }
+
+// Hill climbing: start from a random layout and keep moving obstacles / start / goal around,
+// keeping every change that does not shorten the best solution, until the target par is reached.
+function tryGenerate(seed: number, spec: Spec, creature: Creature): { layout: Layout; par: number } | null {
+  const rnd = mulberry32(seed)
+  const { w, h } = spec
+  const tiles = new Uint8Array(w * h)
+  const interior: number[] = []
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (x === 0 || y === 0 || x === w - 1 || y === h - 1) tiles[y * w + x] = ROCK
+      else interior.push(y * w + x)
+    }
+  }
+
+  const free = [...interior]
+  const take = () => free.splice(Math.floor(rnd() * free.length), 1)[0]
+  const obstacles: number[] = []
+  const place = (tile: number, count: number) => {
+    for (let i = 0; i < count; i++) {
+      const c = take()
+      tiles[c] = tile
+      obstacles.push(c)
+    }
+  }
+  place(ROCK, spec.rocks)
+  place(BUSH, spec.bushes)
+  place(LAKE, spec.lakes)
+  let start = take()
+  let goal = take()
+  const layout: Layout = { w, h, tiles, start, goal }
+
+  const evaluate = (): number => {
+    layout.start = start
+    layout.goal = goal
+    return solveLayout(layout, creature, start, 0) ?? -1
+  }
+  const powerMatters = (par: number): boolean => {
+    const plain = solveLayout(layout, null, start, 0)
+    return plain === null || plain >= par + 2
+  }
+
+  let current = evaluate()
+  let bestPar = -1
+  let best: { tiles: Uint8Array; start: number; goal: number } | null = null
+
+  for (let step = 0; step < 4000; step++) {
+    if (current > bestPar && powerMatters(current)) {
+      bestPar = current
+      best = { tiles: tiles.slice(), start, goal }
+      if (bestPar >= spec.par) break
+    }
+
+    const r = rnd()
+    const cand = interior[Math.floor(rnd() * interior.length)]
+    let undo: () => void
+    if (r < 0.7) {
+      const oi = Math.floor(rnd() * obstacles.length)
+      const from = obstacles[oi]
+      if (tiles[cand] !== ICE || cand === start || cand === goal) continue
+      const t = tiles[from]
+      tiles[from] = ICE
+      tiles[cand] = t
+      obstacles[oi] = cand
+      undo = () => {
+        tiles[cand] = ICE
+        tiles[from] = t
+        obstacles[oi] = from
+      }
+    } else if (r < 0.85) {
+      if (tiles[cand] !== ICE || cand === goal) continue
+      const old = start
+      start = cand
+      undo = () => {
+        start = old
+      }
+    } else {
+      if (tiles[cand] !== ICE || cand === start) continue
+      const old = goal
+      goal = cand
+      undo = () => {
+        goal = old
+      }
+    }
+
+    const score = evaluate()
+    if (score >= current || (score >= 0 && rnd() < 0.02)) {
+      current = score
+    } else {
+      undo()
+      layout.start = start
+      layout.goal = goal
+    }
+  }
+
+  if (!best) return null
+  return { layout: { w, h, tiles: best.tiles, start: best.start, goal: best.goal }, par: bestPar }
+}
+
+// A hand-made level used only if generation ever fails
 const FALLBACK = [
   '##########',
   '#E...#...#',
@@ -103,58 +255,58 @@ const FALLBACK = [
   '##########',
 ]
 
-// Builds a level for a creature picked by the seed, keeping one where:
-//  - that creature can solve it in about `minMoves` moves
-//  - its power really matters: without powers it is impossible or clearly longer
-export function generateLevel(seed: number, minMoves: number): GeneratedLevel {
-  const rnd = mulberry32(seed)
-  const creature: Creature = rnd() < 0.5 ? 'fire' : 'water'
-  let best: GeneratedLevel | null = null
-
-  for (let attempt = 0; attempt < 5000; attempt++) {
-    const grid: string[][] = []
-    for (let y = 0; y < H; y++) {
-      grid.push([...Array(W)].map((_, x) => (x === 0 || y === 0 || x === W - 1 || y === H - 1 ? '#' : '.')))
-    }
-
-    const freeCells = (): Cell[] => {
-      const free: Cell[] = []
-      for (let y = 1; y < H - 1; y++) {
-        for (let x = 1; x < W - 1; x++) if (grid[y][x] === '.') free.push({ x, y })
-      }
-      return free
-    }
-    const pick = (cells: Cell[]) => cells.splice(Math.floor(rnd() * cells.length), 1)[0]
-    const place = (tile: string, count: number) => {
-      for (let i = 0; i < count; i++) {
-        const c = pick(freeCells())
-        grid[c.y][c.x] = tile
-      }
-    }
-
-    place('#', 6 + Math.floor(rnd() * 4))
-    place('B', 2 + Math.floor(rnd() * 2))
-    place('L', 3 + Math.floor(rnd() * 2))
-
-    const free = freeCells()
-    if (free.length < 2) continue
-    const start = pick(free)
-    const goal = pick(free)
-    grid[start.y][start.x] = 'E'
-    grid[goal.y][goal.x] = 'G'
-    const rows = grid.map((r) => r.join(''))
-
-    const moves = solveLevel(rows, creature)
-    if (moves === null) continue
-    const withoutPowers = solveLevel(rows, null)
-    const powerMatters = withoutPowers === null || withoutPowers >= moves + 2
-
-    if (powerMatters && moves >= minMoves && moves <= minMoves + 3) return { rows, moves, creature }
-    if (powerMatters && (!best || Math.abs(moves - minMoves) < Math.abs(best.moves - minMoves))) {
-      best = { rows, moves, creature }
+export function generateLevel(seed: number, spec: Spec, creature: Creature): GeneratedLevel {
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const result = tryGenerate(seed * 31 + attempt, spec, creature)
+    if (result && result.par >= Math.max(3, Math.floor(spec.par * 0.7))) {
+      return { rows: toRows(result.layout), moves: result.par, creature }
     }
   }
-  return best ?? { rows: FALLBACK, moves: solveLevel(FALLBACK, creature) ?? 0, creature }
+  return { rows: FALLBACK, moves: solveRows(FALLBACK, creature) ?? 0, creature }
+}
+
+// ---------- campaign, daily and random puzzles ----------
+
+// Campaign level n (1, 2, 3...): the board and the solution get longer as n grows.
+export function campaignSpec(n: number): Spec {
+  const w = Math.min(14, 7 + Math.floor((n - 1) / 8))
+  const h = Math.min(10, 6 + Math.floor((n - 1) / 12))
+  const inner = (w - 2) * (h - 2)
+  return {
+    w,
+    h,
+    rocks: Math.round(inner * 0.16),
+    bushes: Math.min(5, 1 + Math.floor(n / 12)),
+    lakes: Math.min(5, 1 + Math.floor(n / 10)),
+    par: Math.min(26, Math.round(3 + n * 0.38)),
+  }
+}
+
+// Odd levels are for Embi, even levels for Drip
+export function campaignLevel(n: number): GeneratedLevel {
+  return generateLevel(n * 7919 + 13, campaignSpec(n), n % 2 === 1 ? 'fire' : 'water')
+}
+
+// A random puzzle, about as hard as the middle of the campaign
+export function randomLevel(seed: number): GeneratedLevel {
+  const rnd = mulberry32(seed)
+  const n = 10 + Math.floor(rnd() * 35)
+  return generateLevel(seed, campaignSpec(n), rnd() < 0.5 ? 'fire' : 'water')
+}
+
+// The two puzzles of a day: the first is medium, the second is bigger and harder.
+// One is for Embi and the other for Drip.
+export const DAILY_SPECS: [Spec, Spec] = [
+  { w: 11, h: 9, rocks: 12, bushes: 3, lakes: 3, par: 10 },
+  { w: 14, h: 10, rocks: 20, bushes: 4, lakes: 5, par: 16 },
+]
+
+export function dailyLevels(day: number): [GeneratedLevel, GeneratedLevel] {
+  const firstIsFire = mulberry32(day)() < 0.5
+  return [
+    generateLevel(day * 10 + 1, DAILY_SPECS[0], firstIsFire ? 'fire' : 'water'),
+    generateLevel(day * 10 + 2, DAILY_SPECS[1], firstIsFire ? 'water' : 'fire'),
+  ]
 }
 
 // A day as a number, e.g. 20261111 (UTC, so it is the same everywhere in the world)
