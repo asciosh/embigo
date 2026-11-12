@@ -1,7 +1,17 @@
 // Client side of the co-op rooms: talks to the Room (Durable Object) through a WebSocket.
 
+import type { RunState } from './rogue'
+
 export type RoomPlayer = { name: string; online: boolean } | null
-export type RoomState = { level: number; history: string; you: 0 | 1; players: [RoomPlayer, RoomPlayer] }
+export type RoomEvent = { id: number; k: string }
+export type RoomState = {
+  level: number
+  history: string
+  you: 0 | 1
+  players: [RoomPlayer, RoomPlayer]
+  run?: RunState | null // roguelike run (hearts, relics, floor) when the room plays the roguelike mode
+  ev?: RoomEvent | null // the last thing that happened in the run: fail, clear, pick, undo, skip, over
+}
 export type SignalKey = 'hi' | 'wait' | 'go' | 'oops' | 'nice'
 export type ConnectionStatus = 'connecting' | 'online' | 'offline'
 
@@ -46,6 +56,7 @@ export class RoomClient {
   readonly code: string
   private name: string
   private level: number
+  private rogueSeed: number | null
   private handlers: RoomHandlers
   private ws: WebSocket | null = null
   private closed = false
@@ -53,7 +64,8 @@ export class RoomClient {
   private heartbeat = 0
   private retryTimer = 0
 
-  constructor(code: string, name: string, level: number, handlers: RoomHandlers) {
+  constructor(code: string, name: string, level: number, handlers: RoomHandlers, rogueSeed: number | null = null) {
+    this.rogueSeed = rogueSeed
     this.code = code
     this.name = name
     this.level = level
@@ -73,7 +85,7 @@ export class RoomClient {
 
     ws.onopen = () => {
       this.retries = 0
-      ws.send(JSON.stringify({ t: 'join', name: this.name, key: playerKey(this.code), level: this.level }))
+      ws.send(JSON.stringify({ t: 'join', name: this.name, key: playerKey(this.code), level: this.level, ...(this.rogueSeed ? { rogue: this.rogueSeed } : {}) }))
       this.handlers.onStatus('online')
       window.clearInterval(this.heartbeat)
       this.heartbeat = window.setInterval(() => this.send({ t: 'hb' }), 30000)

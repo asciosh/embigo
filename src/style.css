@@ -1183,3 +1183,157 @@ button {
   pointer-events: none;
   background: radial-gradient(ellipse at 50% 52%, rgba(0, 0, 0, 0) 58%, rgba(2, 6, 16, 0.5) 100%);
 }
+
+/* ---------- roguelike ("The Descent") ---------- */
+#rogue-bar {
+  position: fixed;
+  left: 18px;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 18px);
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  max-width: min(46vw, 460px);
+}
+
+#rogue-bar[hidden] {
+  display: none;
+}
+
+#rogue-bar .rchip,
+#rogue-bar button {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  background: var(--glass);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 5px 10px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+#rogue-bar button {
+  cursor: pointer;
+}
+
+#rogue-bar button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+#rogue-bar .kind {
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: #ffd166;
+  border-color: rgba(255, 209, 102, 0.55);
+}
+
+#rogue-bar .kind.mirror {
+  color: #d3b3ff;
+  border-color: rgba(200, 160, 255, 0.55);
+}
+
+#rogue-bar .kind.boss {
+  color: #ff9a9a;
+  border-color: rgba(255, 130, 130, 0.6);
+}
+
+#rogue-bar .kind.camp {
+  color: #9dffc0;
+  border-color: rgba(125, 255, 176, 0.5);
+}
+
+#stats div.warn b {
+  color: #ff9a9a;
+}
+
+#rogue .card {
+  max-height: calc(100vh - 36px);
+  overflow-y: auto;
+}
+
+.rogue-rules {
+  text-align: left;
+  margin: 6px 0 10px;
+}
+
+.rogue-rules p {
+  margin: 0 0 8px;
+  padding-left: 14px;
+  position: relative;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.rogue-rules p::before {
+  content: '\2022';
+  position: absolute;
+  left: 2px;
+  color: var(--accent);
+}
+
+.rogue-line {
+  margin: 4px 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.rogue-cards {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 8px;
+}
+
+.rogue-cards .mode:disabled {
+  opacity: 0.55;
+}
+
+.mode.rare {
+  border-color: rgba(255, 209, 102, 0.65);
+  box-shadow: 0 0 16px rgba(255, 209, 102, 0.16);
+}
+
+.mode.cursed {
+  border-color: rgba(255, 110, 130, 0.65);
+  box-shadow: 0 0 16px rgba(255, 90, 110, 0.14);
+}
+
+@media (max-width: 700px), (max-height: 520px) {
+  #rogue-bar {
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: auto;
+    top: calc(env(safe-area-inset-top, 0px) + 122px);
+    justify-content: center;
+    max-width: 94vw;
+  }
+
+  body.rogue #pill {
+    top: calc(env(safe-area-inset-top, 0px) + 168px);
+  }
+}
+
+#rogue-bar .rchip.kind {
+  white-space: nowrap;
+}
+
+.rogue-close {
+  margin-top: 4px;
+  font: inherit;
+  font-weight: 700;
+  color: var(--muted);
+  background: none;
+  border: none;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+
+#rogue-bar .rchip,
+#rogue-bar button {
+  flex: none;
+  white-space: nowrap;
+}

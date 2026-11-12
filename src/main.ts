@@ -6,6 +6,7 @@ import { KOFI_URL } from './config'
 import { CoopGame, type CoopAction, type CoopResult } from './coop'
 import { coopLevel, COOP_LEVEL_COUNT } from './coop-levels'
 import { RoomClient, createRoom, isRoomCode, roomPlayers, type RoomState, type SignalKey } from './online'
+import { KIND_LABEL, RELICS, budgetFor, canUndo, clearFloor, failFloor, floorKind, newRun, pickRelic, rogueCoopLevel, rogueLevel, skipFloor, useUndo, type RunState } from './rogue'
 import { ApiError, fetchLeaderboard, loadSession, login, logout, register, saveSession, submitScore, type Board, type Session } from './api'
 
 const canvas = document.getElementById('game') as HTMLCanvasElement
@@ -26,7 +27,9 @@ function vibrate(pattern: number | number[]): void {
 
 // Screen direction -> game direction. In portrait the board is turned, so "right" on the
 // screen is "down" in the level and "down" on the screen is "right" in the level.
+let mirrorNow = false // roguelike mirror floors: left and right are swapped
 function toGameDir(screen: Dir): Dir {
+  if (mirrorNow) screen = ({ L: 'R', R: 'L', U: 'U', D: 'D' } as Record<Dir, Dir>)[screen]
   if (!view.isPortrait) return screen
   return { R: 'D', L: 'U', D: 'R', U: 'L' }[screen] as Dir
 }
@@ -41,6 +44,7 @@ type Mode =
   | { kind: 'daily'; day: number; idx: 1 | 2 }
   | { kind: 'campaign'; n: number }
   | { kind: 'random'; seed: number }
+  | { kind: 'rogue' }
 
 type Action = { label: string; run: () => void; primary?: boolean }
 
@@ -75,6 +79,12 @@ let vibrationOn = readJson('embigo-vibration', true)
 // ---------- state ----------
 
 let mode: Mode = { kind: 'campaign', n: 1 }
+const ROGUE_SAVE = 'embigo-rogue-solo'
+let rogue: RunState | null = readJson<RunState | null>(ROGUE_SAVE, null)
+const rogueBest = readJson<{ solo: number; coop: number }>('embigo-rogue-best', { solo: 0, coop: 0 })
+let rogueOpen = false
+let rogueDismiss = false
+let rogueLocked = false // after a failed floor, moves are blocked until you retry
 let game: Game
 let par = 0
 let busy = false
@@ -88,7 +98,7 @@ let introOpen = false
 let menuOpen = false
 let boardOpen = false
 let lobbyOpen = false
-const overlayOpen = () => introOpen || menuOpen || boardOpen || lobbyOpen
+const overlayOpen = () => introOpen || menuOpen || boardOpen || lobbyOpen || rogueOpen
 
 function todayLevels(day: number): [GeneratedLevel, GeneratedLevel] {
   if (!dailyCache || dailyCache.day !== day) dailyCache = { day, levels: dailyLevels(day) }
@@ -235,24 +245,29 @@ function renderMenu(): void {
 function levelFor(m: Mode): GeneratedLevel {
   if (m.kind === 'daily') return todayLevels(m.day)[m.idx - 1]
   if (m.kind === 'campaign') return campaignLevel(m.n)
+  if (m.kind === 'rogue') return rogueLevel(rogue ?? newRun(1, false))
   return randomLevel(m.seed)
 }
 
-const hintsActive = () => hintsOn && mode.kind !== 'daily'
+const hintsActive = () => (mode.kind === 'rogue' ? !!rogue?.oracle : hintsOn && mode.kind !== 'daily')
 
 function labelFor(m: Mode): string {
   if (m.kind === 'daily') return `Daily ${m.idx}`
   if (m.kind === 'campaign') return `Level ${m.n}`
+  if (m.kind === 'rogue') return `Floor ${rogue?.floor ?? 1}`
   return 'Random'
 }
 
 function updateHud(): void {
+  const r = runNow()
   if (coopSession) {
-    $('moves').textContent = String(coopSession.game.moves)
+    $('moves').textContent = r ? `${coopSession.game.moves}/${budgetNow()}` : String(coopSession.game.moves)
     updateCoopChips()
+    if (r) rogueUiRefresh()
     return
   }
-  $('moves').textContent = String(game.moves)
+  $('moves').textContent = r ? `${game.moves}/${budgetNow()}` : String(game.moves)
+  if (r) rogueUiRefresh()
   updateRoster()
 }
 
@@ -309,13 +324,20 @@ function startMode(m: Mode): void {
   $('cpower').textContent = c.power
   $('dot').style.background = c.color
   $('dot').style.boxShadow = `0 0 12px ${c.color}`
+  rogueLocked = false
   hideToast()
   hidePill()
   renderRoster()
   updateHud()
+  rogueUiRefresh()
+  if (mirrorNow) showPill('Mirror floor: left and right are swapped', 'info')
 }
 
 function restart(): void {
+  if (runNow()) {
+    rogueRestart()
+    return
+  }
   if (coopSession) {
     coopRestart()
     return
@@ -334,7 +356,7 @@ function restart(): void {
 const randomPuzzle = () => startMode({ kind: 'random', seed: Math.floor(Math.random() * 1e9) + 1 })
 
 function toggleHints(): void {
-  if (coopSession) return
+  if (coopSession || mode.kind === 'rogue') return
   hintsOn = !hintsOn
   writeJson('embigo-hints', hintsOn)
   game.setTracking(hintsActive())
@@ -409,6 +431,10 @@ async function sendDaily(day: number, idx: 1 | 2, moves: string, title: string, 
 
 async function onWin(): Promise<void> {
   view.celebrate()
+  if (mode.kind === 'rogue' && rogue) {
+    await rogueSoloWin()
+    return
+  }
   $('par').textContent = String(par) // now the best possible score is revealed
   const c = CREATURES[game.creature]
   const title = `${c.name} made it!`
@@ -435,7 +461,7 @@ async function onWin(): Promise<void> {
 }
 
 async function trySwap(index: number): Promise<void> {
-  if (coopSession || overlayOpen() || busy || index === game.active || index >= game.roster.length) return
+  if (coopSession || overlayOpen() || rogueLocked || busy || index === game.active || index >= game.roster.length) return
   if (!game.onPad()) {
     showPill('Stop on a swap pad to switch', 'bad')
     return
@@ -446,6 +472,10 @@ async function trySwap(index: number): Promise<void> {
   updateHud()
   view.swapModel(game)
   vibrate(25)
+  if (mode.kind === 'rogue' && rogue && game.moves > budgetNow()) {
+    await rogueFail('You ran out of moves.')
+    return
+  }
   if (res.deadEnd) {
     streak = 0
     view.sparkle('bad')
@@ -461,7 +491,7 @@ async function trySwap(index: number): Promise<void> {
 }
 
 async function tryMove(dir: Dir, buffered = false): Promise<void> {
-  if (coopSession || overlayOpen()) return
+  if (coopSession || overlayOpen() || rogueLocked) return
   if (busy) {
     if (buffered) queued = dir // a quick second swipe is played right after the current slide
     return
@@ -475,6 +505,10 @@ async function tryMove(dir: Dir, buffered = false): Promise<void> {
   updateRoster()
   vibrate(res.burned ? 25 : res.jumped ? 15 : 8)
 
+  if (mode.kind === 'rogue' && rogue && game.moves > budgetNow()) {
+    await rogueFail('You ran out of moves.')
+    return
+  }
   if (res.won) {
     queued = null
     hidePill()
@@ -639,8 +673,10 @@ type CoopSession = {
   you: 0 | 1 | null // which player you are in an online room (null: one phone, both play)
   names: [string, string]
   partnerOnline: boolean
+  run: RunState | null // roguelike run (null in the normal co-op levels)
 }
 
+let lastEvId = 0
 let coopSession: CoopSession | null = null
 let roomClient: RoomClient | null = null
 let coopUnlocked: number = readJson('embigo-coop', 1)
@@ -675,13 +711,15 @@ function leaveCoop(): void {
   hidePill()
 }
 
-function loadCoop(n: number, online: RoomClient | null, you: 0 | 1 | null, names: [string, string], history = '', partnerOnline = true): void {
+function loadCoop(n: number, online: RoomClient | null, you: 0 | 1 | null, names: [string, string], history = '', partnerOnline = true, run: RunState | null = null): void {
   closeLobby()
   closeMenu()
-  const level = coopLevel(n)
+  hideRogue()
+  rogueLocked = false
+  const level = run ? rogueCoopLevel(run) : coopLevel(n)
   const g = new CoopGame(level.rows, level.roster)
   g.replay(history)
-  const session: CoopSession = { game: g, n, online, you, names, partnerOnline }
+  const session: CoopSession = { game: g, n, online, you, names, partnerOnline, run }
   coopSession = session
   mode = { kind: 'random', seed: 0 } // not a normal puzzle: the menu does not mark any level as current
   par = level.par
@@ -690,15 +728,20 @@ function loadCoop(n: number, online: RoomClient | null, you: 0 | 1 | null, names
   coopBusy = false
   netQueue = []
   view.setCoopLevel(g)
-  $('label').textContent = `Co-op ${n}`
-  $('par').textContent = g.won ? String(par) : '?'
+  $('label').textContent = run ? `Floor ${run.floor}` : `Co-op ${n}`
+  $('par').textContent = g.won && !run ? String(par) : '?'
   $('coopbar').hidden = false
   $('signals').hidden = online === null
   renderCoopChips(session)
   hideToast()
   hidePill()
   updateHud()
-  if (g.won) coopWin(session)
+  rogueUiRefresh()
+  if (run) {
+    if (!g.won) announceTurn(session)
+    if (mirrorNow) showPill('Mirror floor: left and right are swapped', 'info')
+    maybeCoopCards(session)
+  } else if (g.won) coopWin(session)
   else announceTurn(session)
 }
 
@@ -742,7 +785,8 @@ function announceTurn(s: CoopSession): void {
 
 async function coopMove(action: CoopAction): Promise<void> {
   const s = coopSession
-  if (!s || coopBusy || overlayOpen() || s.game.won) return
+  if (!s || coopBusy || overlayOpen() || rogueLocked || s.game.won) return
+  if (s.run && s.run.phase !== 'play') return
   if (s.online && s.game.turn !== s.you) {
     showPill(`Wait for ${s.names[s.game.turn]}`, 'bad')
     return
@@ -761,6 +805,10 @@ async function playCoopResult(s: CoopSession, res: CoopResult): Promise<void> {
   if (coopSession !== s) return
   vibrate(res.burned ? 25 : res.jumped ? 15 : 8)
   updateHud()
+  if (s.run && !s.online && s.game.moves > budgetFor(s.run, par)) {
+    localCoopFail(s, 'You ran out of moves.')
+    return
+  }
   if (res.won) {
     hidePill()
     vibrate([20, 40, 20, 40, 90])
@@ -779,6 +827,12 @@ function coopRestart(): void {
 }
 
 function coopWin(s: CoopSession): void {
+  if (s.run) {
+    if (!s.online && s.run.phase === 'play') clearFloor(s.run)
+    updateHud()
+    maybeCoopCards(s)
+    return
+  }
   $('par').textContent = String(par)
   coopUnlocked = Math.max(coopUnlocked, s.n + 1)
   writeJson('embigo-coop', coopUnlocked)
@@ -801,7 +855,10 @@ function onRoomState(st: RoomState): void {
   const s = coopSession
   if (!s) {
     // both players are in the room: the game starts
-    if (st.players[0] && st.players[1] && roomClient) loadCoop(st.level, roomClient, st.you, names, st.history, partnerOnline)
+    if (st.players[0] && st.players[1] && roomClient) {
+      lastEvId = st.ev?.id ?? 0
+      loadCoop(st.level, roomClient, st.you, names, st.history, partnerOnline, st.run ?? null)
+    }
     return
   }
   const wasOnline = s.partnerOnline
@@ -811,13 +868,24 @@ function onRoomState(st: RoomState): void {
   if (wasOnline && !partnerOnline) showPill(`${names[other]} disconnected. Waiting...`, 'info', true)
   else if (!wasOnline && partnerOnline) showPill(`${names[other]} is back`, 'info')
   renderCoopChips(s)
-  syncHistory(s, st)
+  const prevRun = s.run
+  s.run = st.run ?? null
+  syncHistory(s, st, prevRun)
+  const ev = st.ev && st.ev.id > lastEvId ? st.ev : null
+  if (st.ev) lastEvId = st.ev.id
+  if (ev?.k === 'fail' && s.run) {
+    const shielded = prevRun !== null && prevRun.hearts === s.run.hearts
+    showToast(shielded ? 'Shield broken!' : 'Floor failed', failText(shielded ? 'shielded' : 'retry', s.run, 'Out of moves.'), [{ label: 'Retry', primary: true, run: hideToast }])
+  }
+  updateHud()
+  maybeCoopCards(s)
 }
 
 // Bring our game in line with the room: play the partner's moves, or rebuild after a restart
-function syncHistory(s: CoopSession, st: RoomState): void {
-  if (st.level !== s.n) {
-    loadCoop(st.level, s.online, st.you, s.names, st.history, s.partnerOnline)
+function syncHistory(s: CoopSession, st: RoomState, prevRun: RunState | null): void {
+  const changed = st.run ? !prevRun || prevRun.floor !== st.run.floor || prevRun.seed !== st.run.seed : st.level !== s.n
+  if (changed) {
+    loadCoop(st.level, s.online, st.you, s.names, st.history, s.partnerOnline, st.run ?? null)
     return
   }
   const local = s.game.history.join('')
@@ -827,7 +895,7 @@ function syncHistory(s: CoopSession, st: RoomState): void {
     void drainNet()
     return
   }
-  loadCoop(st.level, s.online, st.you, s.names, st.history, s.partnerOnline)
+  loadCoop(st.level, s.online, st.you, s.names, st.history, s.partnerOnline, st.run ?? null)
 }
 
 async function drainNet(): Promise<void> {
@@ -936,7 +1004,7 @@ function joinRoom(code: string): void {
       if (status === 'offline') showPill('Connection lost. Reconnecting...', 'bad', true)
       else if (status === 'online') hidePill()
     },
-  })
+  }, coopRogueMode ? Math.floor(Math.random() * 1e9) + 1 : null)
   roomClient = client
   setLobbyError('')
   renderLobby()
@@ -1007,7 +1075,9 @@ const KEYS: Record<string, Dir> = {
 }
 
 function closeTopOverlay(): void {
-  if (lobbyOpen) closeLobby()
+  if (rogueOpen) {
+    if (rogueDismiss) hideRogue()
+  } else if (lobbyOpen) closeLobby()
   else if (boardOpen) closeBoard()
   else if (menuOpen) closeMenu()
   else if (introOpen) closeIntro()
@@ -1031,6 +1101,7 @@ window.addEventListener('keydown', (e) => {
     inputDir(toGameDir(dir))
   } else if (key === 'p' && coopSession) void coopMove('P')
   else if (key === 'r') restart()
+  else if (key === 'u') rogueUndo()
   else if (key === 'm') openMenu()
   else if (key === 'n') randomPuzzle()
   else if (key === 'l') openBoard()
@@ -1138,7 +1209,7 @@ if (KOFI_OK) {
 }
 $('btn-coop').addEventListener('click', openLobby)
 $('lobby-close').addEventListener('click', closeLobby)
-$('btn-coop-local').addEventListener('click', () => loadCoop(coopPick, null, null, ['Player 1', 'Player 2']))
+$('btn-coop-local').addEventListener('click', () => (coopRogueMode ? startLocalRogue() : loadCoop(coopPick, null, null, ['Player 1', 'Player 2'])))
 $('btn-coop-create').addEventListener('click', () => void onCreateRoom())
 $('btn-coop-join').addEventListener('click', () => void onJoinRoom())
 $('btn-leave-room').addEventListener('click', leaveRoom)
@@ -1160,6 +1231,397 @@ $('signals').addEventListener('click', (e) => {
 $('coop-code').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') void onJoinRoom()
 })
+
+// ---------- roguelike: "The Descent" ----------
+
+const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text = ''): HTMLElementTagNameMap[K] => {
+  const e = document.createElement(tag)
+  if (cls) e.className = cls
+  if (text) e.textContent = text
+  return e
+}
+
+const runNow = (): RunState | null => (coopSession ? coopSession.run : mode.kind === 'rogue' ? rogue : null)
+const budgetNow = (): number => {
+  const r = runNow()
+  return r ? budgetFor(r, par) : 0
+}
+const saveRogue = (): void => {
+  if (rogue) writeJson(ROGUE_SAVE, rogue)
+}
+const heartsText = (r: RunState): string => `\u2764 ${r.hearts}/${r.maxHearts}`
+
+let rogueEl: HTMLElement | null = null
+function rogueCardEl(): HTMLElement {
+  if (!rogueEl) {
+    rogueEl = el('div', 'overlay hidden')
+    rogueEl.id = 'rogue'
+    rogueEl.append(el('div', 'card'))
+    document.body.append(rogueEl)
+  }
+  return rogueEl.firstElementChild as HTMLElement
+}
+
+function showRogue(build: (card: HTMLElement) => void, dismissable = false): void {
+  const card = rogueCardEl()
+  card.replaceChildren()
+  build(card)
+  rogueDismiss = dismissable
+  rogueOpen = true
+  rogueEl?.classList.remove('hidden')
+}
+
+function hideRogue(): void {
+  rogueOpen = false
+  rogueEl?.classList.add('hidden')
+}
+
+function runSummary(r: RunState): HTMLElement {
+  const line = el('p', 'rogue-line')
+  const relics = r.relics.map((id) => RELICS[id].icon).join(' ')
+  line.textContent = `${heartsText(r)} \u00B7 Floor ${r.floor}${relics ? ` \u00B7 ${relics}` : ''}`
+  return line
+}
+
+function modeButton(title: string, hint: string, run: () => void, cls = ''): HTMLButtonElement {
+  const b = el('button', `mode wide ${cls}`.trim())
+  b.append(el('b', '', title), el('span', '', hint))
+  b.addEventListener('click', run)
+  return b
+}
+
+// The bar with the floor type, the relics you own and the Undo / Skip buttons
+function rogueUiRefresh(): void {
+  const r = runNow()
+  document.body.classList.toggle('rogue', r !== null)
+  const caps = $('stats').querySelectorAll('small')
+  caps[0].textContent = r ? 'Floor' : 'Puzzle'
+  caps[2].textContent = r ? 'Hearts' : 'Par'
+  let bar = document.getElementById('rogue-bar')
+  if (!bar) {
+    bar = el('div')
+    bar.id = 'rogue-bar'
+    bar.hidden = true
+    document.body.append(bar)
+  }
+  if (!r) {
+    bar.hidden = true
+    mirrorNow = false
+    $('moves').parentElement?.classList.remove('warn')
+    return
+  }
+  const kind = floorKind(r.seed, r.floor)
+  mirrorNow = kind === 'mirror' && r.phase === 'play'
+  $('label').textContent = String(r.floor)
+  $('par').textContent = heartsText(r)
+  const used = coopSession ? coopSession.game.moves : game.moves
+  $('moves').parentElement?.classList.toggle('warn', budgetNow() - used <= 1)
+
+  bar.replaceChildren()
+  bar.hidden = false
+  if (kind !== 'normal') bar.append(el('span', `rchip kind ${kind}`, KIND_LABEL[kind].toUpperCase()))
+  const counts = new Map<string, number>()
+  for (const id of r.relics) counts.set(id, (counts.get(id) ?? 0) + 1)
+  for (const [id, n] of counts) {
+    const chip = el('span', 'rchip', `${RELICS[id as keyof typeof RELICS].icon}${n > 1 ? `\u00D7${n}` : ''}`)
+    chip.title = RELICS[id as keyof typeof RELICS].name
+    bar.append(chip)
+  }
+  if (r.shield > 0) bar.append(el('span', 'rchip', `\u{1F6E1}\uFE0F${r.shield}`))
+  if (r.rewinds > 0) {
+    const b = el('button', '', `\u23EA ${r.rewinds - r.undone}`)
+    b.title = 'Undo the last move (U)'
+    b.disabled = !canUndo(r)
+    b.addEventListener('click', rogueUndo)
+    bar.append(b)
+  }
+  if (r.keys > 0) {
+    const b = el('button', '', `\u{1F5DD}\uFE0F ${r.keys}`)
+    b.title = 'Skip this floor'
+    b.addEventListener('click', rogueSkip)
+    bar.append(b)
+  }
+}
+
+function openRogueStart(): void {
+  closeMenu()
+  hideToast()
+  const saved = rogue && rogue.phase !== 'over' ? rogue : null
+  showRogue((card) => {
+    card.append(el('h2', '', 'The Descent'), el('p', 'sub', 'Roguelike mode'))
+    const rules = el('div', 'rogue-rules')
+    for (const t of [
+      'Every floor is a puzzle with a strict move budget. Go over it and you lose a heart. No hearts left: the run is over.',
+      'Clear a floor and pick 1 of 3 cards. They stack for the whole run: hearts, extra moves, undo, shields... and a few cursed deals.',
+      'Watch out for Mirror floors (left and right swapped), Elite and Boss floors. Rest at the Campfire.',
+      'No hints. Restarting a floor costs a heart. Hard from the start.',
+    ]) rules.append(el('p', '', t))
+    card.append(rules)
+    if (rogueBest.solo > 0) card.append(el('p', 'rogue-line', `Your best: ${rogueBest.solo} floors cleared`))
+    const list = el('div', 'rogue-cards')
+    if (saved) list.append(modeButton(`Continue run \u00B7 Floor ${saved.floor}`, `${heartsText(saved)} \u00B7 ${saved.cleared} cleared`, () => startRogue(saved), 'rare'))
+    list.append(modeButton('New run', 'A random descent', () => startRogue(newRun(Math.floor(Math.random() * 1e9) + 1, false))))
+    list.append(modeButton('Daily run', 'Same floors for everyone today', () => startRogue(newRun(dailySeed(), false))))
+    card.append(list)
+    const close = el('button', 'rogue-close', 'Close')
+    close.addEventListener('click', hideRogue)
+    card.append(close)
+  }, true)
+}
+
+function startRogue(run: RunState): void {
+  hideRogue()
+  rogue = run
+  saveRogue()
+  startMode({ kind: 'rogue' })
+  rogueCheckPhase()
+}
+
+function openRogueCards(run: RunState, onPick: (i: number) => void): void {
+  hideToast()
+  const camp = floorKind(run.seed, run.floor) === 'camp'
+  showRogue((card) => {
+    card.append(el('h2', '', camp ? 'Campfire' : `Floor ${run.floor} cleared!`))
+    card.append(el('p', 'sub', camp ? 'You rest and heal 1 heart. Pick a card.' : 'Pick a card for the rest of the run.'))
+    card.append(runSummary(run))
+    const list = el('div', 'rogue-cards')
+    run.offers.forEach((id, i) => {
+      const relic = RELICS[id]
+      const b = modeButton(`${relic.icon} ${relic.name}`, relic.text, () => {
+        list.querySelectorAll('button').forEach((x) => (x.disabled = true))
+        window.setTimeout(() => list.querySelectorAll('button').forEach((x) => (x.disabled = false)), 4000)
+        onPick(i)
+      }, relic.cursed ? 'cursed' : relic.rarity === 2 ? 'rare' : '')
+      list.append(b)
+    })
+    card.append(list)
+  })
+}
+
+function showRogueOver(run: RunState): void {
+  hideToast()
+  const key = run.coop ? 'coop' : 'solo'
+  if (run.cleared > rogueBest[key]) {
+    rogueBest[key] = run.cleared
+    writeJson('embigo-rogue-best', rogueBest)
+  }
+  const onlineSession = coopSession?.online ?? null
+  showRogue((card) => {
+    card.append(el('h2', '', 'Run over'))
+    card.append(el('p', 'sub', `You cleared ${run.cleared} ${run.cleared === 1 ? 'floor' : 'floors'} and fell on floor ${run.floor}.`))
+    card.append(el('p', 'rogue-line', `Best: ${rogueBest[key]} floors cleared`))
+    if (run.relics.length > 0) card.append(el('p', 'rogue-line', run.relics.map((id) => RELICS[id].icon).join(' ')))
+    const list = el('div', 'rogue-cards')
+    list.append(
+      modeButton('New run', run.coop ? 'Another descent together' : 'Try again', () => {
+        if (run.coop) {
+          if (onlineSession) onlineSession.send({ t: 'newrun' })
+          else startLocalRogue()
+        } else startRogue(newRun(Math.floor(Math.random() * 1e9) + 1, false))
+      }, 'rare'),
+    )
+    card.append(list)
+    const close = el('button', 'rogue-close', 'Close')
+    close.addEventListener('click', hideRogue)
+    card.append(close)
+  }, true)
+}
+
+function rogueCheckPhase(): void {
+  const run = rogue
+  if (!run || mode.kind !== 'rogue') return
+  if (run.phase === 'over') showRogueOver(run)
+  else if (run.phase === 'pick') openRogueCards(run, soloPick)
+}
+
+function soloPick(i: number): void {
+  const run = rogue
+  if (!run || !pickRelic(run, i)) return
+  saveRogue()
+  hideRogue()
+  startMode({ kind: 'rogue' })
+  rogueCheckPhase() // the campfire shows its cards right away
+}
+
+async function rogueSoloWin(): Promise<void> {
+  const run = rogue
+  if (!run) return
+  clearFloor(run)
+  saveRogue()
+  hidePill()
+  rogueUiRefresh()
+  await sleep(800)
+  rogueCheckPhase()
+}
+
+function failText(outcome: 'retry' | 'shielded' | 'over', run: RunState, why: string): string {
+  return outcome === 'shielded' ? `${why} Your Frost Shield broke, no heart lost.` : `${why} You lost a heart: ${heartsText(run)}.`
+}
+
+async function rogueFail(why: string): Promise<void> {
+  const run = rogue
+  if (!run) return
+  rogueLocked = true
+  queued = null
+  const outcome = failFloor(run)
+  saveRogue()
+  view.sparkle('bad')
+  view.setMood('worried', 4)
+  vibrate([30, 50, 30])
+  updateHud()
+  rogueUiRefresh()
+  if (outcome === 'over') {
+    await sleep(600)
+    showRogueOver(run)
+    return
+  }
+  showToast(outcome === 'shielded' ? 'Shield broken!' : 'Floor failed', failText(outcome, run, why), [
+    { label: 'Retry floor', primary: true, run: () => startMode({ kind: 'rogue' }) },
+  ])
+}
+
+function localCoopFail(s: CoopSession, why: string): void {
+  const run = s.run
+  if (!run) return
+  rogueLocked = true
+  const outcome = failFloor(run)
+  view.sparkle('bad')
+  vibrate([30, 50, 30])
+  updateHud()
+  rogueUiRefresh()
+  if (outcome === 'over') {
+    showRogueOver(run)
+    return
+  }
+  showToast(outcome === 'shielded' ? 'Shield broken!' : 'Floor failed', failText(outcome, run, why), [
+    { label: 'Retry floor', primary: true, run: () => loadCoop(0, null, null, s.names, '', true, run) },
+  ])
+}
+
+function rogueRestart(): void {
+  const run = runNow()
+  if (!run || run.phase !== 'play') return
+  const moves = coopSession ? coopSession.game.moves : game.moves
+  if (moves === 0 || rogueLocked) return
+  showToast('Restart the floor?', 'It costs a heart.', [
+    {
+      label: 'Restart',
+      primary: true,
+      run: () => {
+        hideToast()
+        const s = coopSession
+        if (s) {
+          if (s.online) s.online.send({ t: 'restart' }) // the room takes the heart
+          else localCoopFail(s, 'You restarted the floor.')
+        } else void rogueFail('You restarted the floor.')
+      },
+    },
+    { label: 'Keep playing', run: hideToast },
+  ])
+}
+
+function rogueUndo(): void {
+  const run = runNow()
+  if (!run || !canUndo(run) || rogueLocked || overlayOpen()) return
+  const s = coopSession
+  if (s) {
+    if (s.game.history.length === 0 || coopBusy) return
+    if (s.online) {
+      s.online.send({ t: 'undo' })
+      return
+    }
+    useUndo(run)
+    loadCoop(0, null, null, s.names, s.game.history.slice(0, -1).join(''), true, run)
+    return
+  }
+  if (busy || game.history.length === 0) return
+  const keep = game.history.slice(0, -1)
+  game.restart()
+  for (const a of keep) game.apply(a)
+  useUndo(run)
+  saveRogue()
+  game.setTracking(hintsActive())
+  view.setLevel(game, false)
+  streak = 0
+  queued = null
+  hidePill()
+  renderRoster()
+  updateHud()
+  rogueUiRefresh()
+}
+
+function rogueSkip(): void {
+  const run = runNow()
+  if (!run || run.keys <= 0 || run.phase !== 'play' || rogueLocked || overlayOpen()) return
+  const s = coopSession
+  if (s) {
+    if (s.online) {
+      s.online.send({ t: 'skip' })
+      return
+    }
+    skipFloor(run)
+    loadCoop(0, null, null, s.names, '', true, run)
+    return
+  }
+  skipFloor(run)
+  saveRogue()
+  startMode({ kind: 'rogue' })
+  rogueCheckPhase()
+}
+
+// ----- roguelike co-op -----
+
+function startLocalRogue(): void {
+  loadCoop(0, null, null, ['Player 1', 'Player 2'], '', true, newRun(Math.floor(Math.random() * 1e9) + 1, true))
+}
+
+function maybeCoopCards(s: CoopSession): void {
+  const run = s.run
+  if (!run || coopSession !== s || rogueOpen || coopBusy) return
+  if (run.phase === 'over') {
+    showRogueOver(run)
+    return
+  }
+  const camp = floorKind(run.seed, run.floor) === 'camp'
+  if (run.phase === 'pick' && (s.game.won || camp)) openRogueCards(run, (i) => pickCoop(s, i))
+}
+
+function pickCoop(s: CoopSession, i: number): void {
+  const run = s.run
+  if (!run) return
+  if (s.online) {
+    s.online.send({ t: 'pick', i }) // the room applies it and starts the next floor for both
+    return
+  }
+  if (!pickRelic(run, i)) return
+  loadCoop(0, null, null, s.names, '', true, run)
+}
+
+// roguelike buttons: created here, so index.html stays as it is
+let coopRogueMode = false
+{
+  const title = el('h3', '', 'Roguelike')
+  const button = modeButton('\u{1F5E1}\uFE0F The Descent', 'Endless hard floors, hearts and cards', openRogueStart)
+  button.id = 'btn-rogue'
+  $('levels').insertAdjacentElement('afterend', button)
+  $('levels').insertAdjacentElement('afterend', title)
+
+  const toggle = el('button', 'mode wide')
+  toggle.id = 'btn-coop-rogue'
+  const t1 = el('b')
+  const t2 = el('span')
+  const paint = () => {
+    t1.textContent = coopRogueMode ? 'Mode: Roguelike' : 'Mode: Co-op levels'
+    t2.textContent = coopRogueMode ? 'Endless hard floors with cards (tap to switch)' : 'The 24 handmade levels (tap to switch)'
+  }
+  paint()
+  toggle.append(t1, t2)
+  toggle.addEventListener('click', () => {
+    coopRogueMode = !coopRogueMode
+    paint()
+  })
+  document.querySelector('#lobby-start .stepper')?.insertAdjacentElement('beforebegin', toggle)
+}
 
 // ---------- start ----------
 
