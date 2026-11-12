@@ -57,3 +57,11 @@ npx wrangler dev
 ## Status
 
 Playable and online. More creatures and sounds are planned.
+
+## License
+
+Copyright (c) 2026 Simone. All rights reserved. The source is public to be read, not reused: see [LICENSE](LICENSE).
+
+## Support
+
+If you enjoy Embigo, you can [buy me a coffee on Ko-fi](https://ko-fi.com/nome).
