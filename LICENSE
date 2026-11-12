@@ -1,0 +1,27 @@
+Embigo - Copyright (c) 2026 Simone (GitHub: asciosh). All rights reserved.
+
+This repository is public so that it can be read and evaluated (for example as a
+portfolio piece). Being public does not grant any right to use the work.
+
+You MAY:
+  - read the source code in this repository;
+  - fork the repository on GitHub, and view the fork, as allowed by the GitHub
+    Terms of Service;
+  - play the game at its official address.
+
+You MAY NOT, without prior written permission from the copyright holder:
+  - copy, reuse, modify or redistribute the source code, in whole or in part;
+  - copy, reuse or redistribute the artwork, characters, 3D models, sounds, level
+    data or text (including the names "Embigo", "Embi", "Drip" and "Zefi");
+  - host a copy of the game or build a derivative game, for money or for free;
+  - use the code or assets to train or build other software products.
+
+Third-party libraries used by this project (for example three.js, Vite,
+TypeScript, Wrangler) stay under their own licenses, which are not changed by
+this file.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT
+HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING FROM THE USE
+OF THE SOFTWARE.

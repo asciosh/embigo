@@ -2,6 +2,7 @@ import './style.css'
 import { campaignLevel, dailyLevels, dailySeed, randomLevel, type Creature, type GeneratedLevel } from './generator'
 import { Game, type Dir } from './game'
 import { View } from './scene'
+import { KOFI_URL } from './config'
 import { CoopGame, type CoopAction, type CoopResult } from './coop'
 import { coopLevel, COOP_LEVEL_COUNT } from './coop-levels'
 import { RoomClient, createRoom, isRoomCode, roomPlayers, type RoomState, type SignalKey } from './online'
@@ -335,6 +336,23 @@ function toggleHints(): void {
   if (menuOpen) renderMenu()
 }
 
+// ---------- Ko-fi support link (a plain link: no script, no cookies) ----------
+
+const KOFI_OK = /^https:\/\/ko-fi\.com\/[A-Za-z0-9_-]+\/?$/.test(KOFI_URL)
+
+function openKofi(): void {
+  if (KOFI_OK) window.open(KOFI_URL, '_blank', 'noopener')
+}
+
+// A gentle reminder, at most once a day: only after finishing both daily puzzles
+function askForSupportToday(): boolean {
+  if (!KOFI_OK) return false
+  const today = dailySeed()
+  if (readJson<number>('embigo-kofi-day', 0) === today) return false
+  writeJson('embigo-kofi-day', today)
+  return true
+}
+
 // ---------- scores ----------
 
 function firstUnfinishedDaily(): 1 | 2 | null {
@@ -360,9 +378,9 @@ async function sendDaily(day: number, idx: 1 | 2, moves: string, title: string, 
     const r = await submitScore(day, idx, moves, session.token)
     pending = pending.filter((p) => !(p.day === day && p.idx === idx))
     if (r.done === 2 && r.rank !== null && r.total !== null) {
-      showToast(title, `${base} Total today: ${r.total} moves. You are #${r.rank}.`, [
-        { label: 'Leaderboard', run: openBoard, primary: true },
-      ])
+      const actions: Action[] = [{ label: 'Leaderboard', run: openBoard, primary: true }]
+      if (askForSupportToday()) actions.push({ label: '\u2615 Support', run: openKofi })
+      showToast(title, `${base} Total today: ${r.total} moves. You are #${r.rank}.`, actions)
     } else {
       const more = idx === 1 ? 'Finish Daily 2 to see the leaderboard.' : 'Finish Daily 1 to see the leaderboard.'
       showToast(title, `${base} Saved. ${more}`, nextActions)
@@ -1074,6 +1092,22 @@ $('btn-login').addEventListener('click', () => void authenticate('login'))
 $('btn-register').addEventListener('click', () => void authenticate('register'))
 $('btn-logout').addEventListener('click', () => void doLogout())
 
+
+if (KOFI_OK) {
+  const button = document.createElement('button')
+  button.id = 'btn-kofi'
+  button.className = 'mode wide'
+  const title = document.createElement('b')
+  title.textContent = '\u2615 Support Embigo'
+  const hint = document.createElement('span')
+  hint.textContent = 'Buy me a coffee on Ko-fi'
+  button.append(title, hint)
+  button.addEventListener('click', openKofi)
+  const row = document.createElement('div')
+  row.className = 'row'
+  row.append(button)
+  $('btn-vibe').parentElement?.insertAdjacentElement('afterend', row)
+}
 
 $('btn-coop').addEventListener('click', openLobby)
 $('lobby-close').addEventListener('click', closeLobby)
