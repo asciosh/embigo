@@ -1,10 +1,14 @@
 import { dayNumber } from '../src/generator'
 import { getDailyPuzzles } from '../src/puzzles'
 import { Game } from '../src/game'
+import { Room } from './room'
+
+export { Room }
 
 type Env = {
   DB: D1Database
   ASSETS: Fetcher
+  ROOMS: DurableObjectNamespace<Room>
   PIN_PEPPER?: string // optional secret that makes stored PIN hashes harder to crack
 }
 
@@ -257,6 +261,28 @@ async function leaderboard(request: Request, env: Env): Promise<Response> {
   return json({ day, locked: false, players, scores: results })
 }
 
+// ---------- co-op rooms ----------
+
+const CODE_RE = /^[BCDFGHJKLMNPQRSTVWXZ]{5}$/
+const CODE_LETTERS = 'BCDFGHJKLMNPQRSTVWXZ' // no vowels: codes never spell words
+
+async function createRoom(env: Env): Promise<Response> {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const bytes = crypto.getRandomValues(new Uint8Array(5))
+    const code = [...bytes].map((b) => CODE_LETTERS[b % CODE_LETTERS.length]).join('')
+    const stub = env.ROOMS.get(env.ROOMS.idFromName(code))
+    const info = (await (await stub.fetch('https://room/exists')).json()) as { players: number }
+    if (info.players === 0) return json({ code })
+  }
+  return fail('Could not create a room, try again', 503)
+}
+
+function roomStub(env: Env, url: URL) {
+  const code = (url.searchParams.get('code') ?? '').toUpperCase()
+  if (!CODE_RE.test(code)) return null
+  return env.ROOMS.get(env.ROOMS.idFromName(code))
+}
+
 // ---------- entry point ----------
 
 export default {
@@ -277,6 +303,18 @@ export default {
           return await submitScore(request, env)
         case 'GET /api/leaderboard':
           return await leaderboard(request, env)
+        case 'POST /api/coop/create':
+          return await createRoom(env)
+        case 'GET /api/coop/room': {
+          const stub = roomStub(env, url)
+          if (!stub) return fail('Invalid room code')
+          return await stub.fetch('https://room/exists')
+        }
+        case 'GET /api/coop/ws': {
+          const stub = roomStub(env, url)
+          if (!stub) return fail('Invalid room code')
+          return await stub.fetch(request)
+        }
         default:
           return fail('Not found', 404)
       }

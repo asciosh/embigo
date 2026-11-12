@@ -905,3 +905,273 @@ button {
     top: calc(env(safe-area-inset-top, 0px) + 118px);
   }
 }
+
+/* ---------- co-op ---------- */
+#pill.info {
+  color: var(--text);
+  background: var(--glass);
+  border: 1px solid var(--line);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.rchip.static {
+  cursor: default;
+}
+
+.rchip.away {
+  opacity: 0.35;
+}
+
+#coopbar {
+  position: fixed;
+  right: 18px;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 18px);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+#btn-pass {
+  font: inherit;
+  font-weight: 800;
+  color: #1b0e00;
+  background: linear-gradient(180deg, #ffd166, #ff9a1a);
+  border: none;
+  border-radius: 14px;
+  padding: 12px 20px;
+  cursor: pointer;
+  box-shadow: 0 6px 20px rgba(255, 150, 26, 0.3);
+}
+
+#signals {
+  display: flex;
+  gap: 6px;
+  padding: 5px;
+  background: var(--glass);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+#signals button {
+  font-size: 20px;
+  width: 42px;
+  height: 42px;
+  background: transparent;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+#signals button:active {
+  background: rgba(160, 205, 255, 0.2);
+}
+
+#bubble {
+  position: fixed;
+  left: 50%;
+  top: calc(env(safe-area-inset-top, 0px) + 74px);
+  transform: translateX(-50%);
+  padding: 8px 18px;
+  font-weight: 800;
+  background: rgba(255, 255, 255, 0.95);
+  color: #10223c;
+  border-radius: 999px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+  transition: opacity 0.25s, transform 0.25s;
+}
+
+#bubble.hidden {
+  opacity: 0;
+  transform: translate(-50%, -10px);
+}
+
+#lobby input {
+  display: block;
+  width: 100%;
+  margin: 0 0 10px;
+  padding: 11px 12px;
+  font: inherit;
+  font-size: 16px;
+  color: var(--text);
+  background: rgba(6, 12, 22, 0.7);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+#lobby input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+#coop-code {
+  flex: 1;
+  margin: 0 !important;
+  text-align: center;
+  letter-spacing: 6px;
+  text-transform: uppercase;
+  font-weight: 800;
+}
+
+#lobby .row {
+  margin: 0 0 10px;
+}
+
+#lobby .row > button:not(.mode) {
+  flex: none;
+  font: inherit;
+  font-weight: 800;
+  color: #1b0e00;
+  background: linear-gradient(180deg, #ffd166, #ff9a1a);
+  border: none;
+  border-radius: 12px;
+  padding: 10px 22px;
+  cursor: pointer;
+}
+
+#lobby #btn-copy-code,
+#lobby #btn-share-code {
+  flex: 1;
+  color: var(--text);
+  background: rgba(160, 205, 255, 0.12);
+  border: 1px solid var(--line);
+}
+
+.stepper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin: 0 0 12px;
+  color: var(--muted);
+}
+
+.stepper button {
+  font: inherit;
+  font-size: 22px;
+  width: 44px;
+  height: 44px;
+  color: var(--text);
+  background: rgba(160, 205, 255, 0.12);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.stepper b {
+  min-width: 36px;
+  font-size: 26px;
+  color: var(--accent);
+}
+
+#room-code {
+  font-size: 44px;
+  font-weight: 900;
+  letter-spacing: 10px;
+  margin: 0 0 14px;
+  color: var(--accent);
+  text-shadow: 0 0 18px rgba(255, 209, 102, 0.4);
+}
+
+#room-players {
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 0;
+  text-align: left;
+}
+
+#room-players li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  font-size: 15px;
+}
+
+#room-players i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+#room-players i.on {
+  background: #4be08a;
+  box-shadow: 0 0 8px #4be08a;
+}
+
+#room-players i.off {
+  background: #5c6a80;
+}
+
+#btn-leave-room {
+  font: inherit;
+  font-weight: 700;
+  color: var(--text);
+  background: rgba(255, 122, 122, 0.15);
+  border: 1px solid rgba(255, 122, 122, 0.4);
+  border-radius: 12px;
+  padding: 10px 18px;
+  cursor: pointer;
+}
+
+#lobby .error {
+  min-height: 18px;
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: #ff8f8f;
+}
+
+@media (max-width: 700px), (max-height: 520px) {
+  #coopbar {
+    left: 10px;
+    right: 10px;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+    justify-content: space-between;
+  }
+
+  #btn-pass {
+    flex: 1;
+    min-height: 50px;
+    font-size: 16px;
+  }
+
+  #signals button {
+    width: 40px;
+    height: 46px;
+  }
+
+  #bubble {
+    top: calc(env(safe-area-inset-top, 0px) + 118px);
+  }
+}
+
+/* the bottom bar spans the whole width: only its buttons should catch clicks */
+#controls {
+  pointer-events: none;
+}
+
+#controls button {
+  pointer-events: auto;
+}
+
+#coopbar {
+  z-index: 3;
+}
+
+/* centered floating labels: never wrap into narrow columns on phones */
+@media (max-width: 700px), (max-height: 520px) {
+  #roster,
+  #creature,
+  #bubble,
+  #pill {
+    width: max-content;
+    max-width: calc(100vw - 20px);
+  }
+
+  .rchip span {
+    white-space: nowrap;
+  }
+}

@@ -2,6 +2,9 @@ import './style.css'
 import { campaignLevel, dailyLevels, dailySeed, randomLevel, type Creature, type GeneratedLevel } from './generator'
 import { Game, type Dir } from './game'
 import { View } from './scene'
+import { CoopGame, type CoopAction, type CoopResult } from './coop'
+import { coopLevel, COOP_LEVEL_COUNT } from './coop-levels'
+import { RoomClient, createRoom, isRoomCode, roomPlayers, type RoomState, type SignalKey } from './online'
 import { ApiError, fetchLeaderboard, loadSession, login, logout, register, saveSession, submitScore, type Board, type Session } from './api'
 
 const canvas = document.getElementById('game') as HTMLCanvasElement
@@ -79,7 +82,8 @@ let dailyCache: { day: number; levels: [GeneratedLevel, GeneratedLevel] } | null
 let introOpen = false
 let menuOpen = false
 let boardOpen = false
-const overlayOpen = () => introOpen || menuOpen || boardOpen
+let lobbyOpen = false
+const overlayOpen = () => introOpen || menuOpen || boardOpen || lobbyOpen
 
 function todayLevels(day: number): [GeneratedLevel, GeneratedLevel] {
   if (!dailyCache || dailyCache.day !== day) dailyCache = { day, levels: dailyLevels(day) }
@@ -123,7 +127,7 @@ function hideToast(): void {
 }
 
 let pillTimer = 0
-function showPill(text: string, kind: 'good' | 'bad', sticky = false): void {
+function showPill(text: string, kind: 'good' | 'bad' | 'info', sticky = false): void {
   const pill = $('pill')
   pill.textContent = text
   pill.className = kind
@@ -236,6 +240,11 @@ function labelFor(m: Mode): string {
 }
 
 function updateHud(): void {
+  if (coopSession) {
+    $('moves').textContent = String(coopSession.game.moves)
+    updateCoopChips()
+    return
+  }
   $('moves').textContent = String(game.moves)
   updateRoster()
 }
@@ -275,6 +284,7 @@ function updateRoster(): void {
 }
 
 function startMode(m: Mode): void {
+  leaveCoop()
   mode = m
   const level = levelFor(m)
   game = new Game(level.rows, level.roster)
@@ -299,6 +309,10 @@ function startMode(m: Mode): void {
 }
 
 function restart(): void {
+  if (coopSession) {
+    coopRestart()
+    return
+  }
   game.restart()
   view.setLevel(game)
   streak = 0
@@ -313,6 +327,7 @@ function restart(): void {
 const randomPuzzle = () => startMode({ kind: 'random', seed: Math.floor(Math.random() * 1e9) + 1 })
 
 function toggleHints(): void {
+  if (coopSession) return
   hintsOn = !hintsOn
   writeJson('embigo-hints', hintsOn)
   game.setTracking(hintsActive())
@@ -396,7 +411,7 @@ async function onWin(): Promise<void> {
 }
 
 async function trySwap(index: number): Promise<void> {
-  if (overlayOpen() || busy || index === game.active || index >= game.roster.length) return
+  if (coopSession || overlayOpen() || busy || index === game.active || index >= game.roster.length) return
   if (!game.onPad()) {
     showPill('Stop on a swap pad to switch', 'bad')
     return
@@ -422,7 +437,7 @@ async function trySwap(index: number): Promise<void> {
 }
 
 async function tryMove(dir: Dir, buffered = false): Promise<void> {
-  if (overlayOpen()) return
+  if (coopSession || overlayOpen()) return
   if (busy) {
     if (buffered) queued = dir // a quick second swipe is played right after the current slide
     return
@@ -516,10 +531,14 @@ function renderBoard(board: Board): void {
   })
 }
 
+let boardRequest = 0 // only the answer of the latest request is shown: a slow old one is ignored
 async function refreshBoard(): Promise<void> {
+  const mine = ++boardRequest
   try {
-    renderBoard(await fetchLeaderboard(dailySeed(), session?.token))
+    const board = await fetchLeaderboard(dailySeed(), session?.token)
+    if (mine === boardRequest) renderBoard(board)
   } catch {
+    if (mine !== boardRequest) return
     $('board-sub').textContent = ''
     const li = document.createElement('li')
     li.className = 'empty'
@@ -584,6 +603,376 @@ async function doLogout(): Promise<void> {
   }
 }
 
+
+// ---------- co-op: two creatures, two players, taking turns ----------
+
+type CoopSession = {
+  game: CoopGame
+  n: number
+  online: RoomClient | null
+  you: 0 | 1 | null // which player you are in an online room (null: one phone, both play)
+  names: [string, string]
+  partnerOnline: boolean
+}
+
+let coopSession: CoopSession | null = null
+let roomClient: RoomClient | null = null
+let coopUnlocked: number = readJson('embigo-coop', 1)
+let coopPick = Math.min(coopUnlocked, COOP_LEVEL_COUNT)
+let coopBusy = false
+let netQueue: string[] = []
+let draining = false
+
+const SIGNALS: Record<SignalKey, string> = {
+  hi: '\u{1F44B} Hi!',
+  wait: '\u270B Wait',
+  go: '\u{1F449} Go!',
+  oops: '\u{1F605} Oops',
+  nice: '\u{1F389} Nice!',
+}
+
+const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms))
+
+// Swipes and arrow keys: in co-op they move the creature of the player whose turn it is
+function inputDir(dir: Dir, buffered = false): void {
+  if (coopSession) void coopMove(dir)
+  else void tryMove(dir, buffered)
+}
+
+function leaveCoop(): void {
+  roomClient?.close()
+  roomClient = null
+  coopSession = null
+  netQueue = []
+  coopBusy = false
+  $('coopbar').hidden = true
+  hidePill()
+}
+
+function loadCoop(n: number, online: RoomClient | null, you: 0 | 1 | null, names: [string, string], history = '', partnerOnline = true): void {
+  closeLobby()
+  closeMenu()
+  const level = coopLevel(n)
+  const g = new CoopGame(level.rows, level.roster)
+  g.replay(history)
+  const session: CoopSession = { game: g, n, online, you, names, partnerOnline }
+  coopSession = session
+  mode = { kind: 'random', seed: 0 } // not a normal puzzle: the menu does not mark any level as current
+  par = level.par
+  queued = null
+  busy = false
+  coopBusy = false
+  netQueue = []
+  view.setCoopLevel(g)
+  $('label').textContent = `Co-op ${n}`
+  $('par').textContent = g.won ? String(par) : '?'
+  $('coopbar').hidden = false
+  $('signals').hidden = online === null
+  renderCoopChips(session)
+  hideToast()
+  hidePill()
+  updateHud()
+  if (g.won) coopWin(session)
+  else announceTurn(session)
+}
+
+function renderCoopChips(s: CoopSession): void {
+  $('creature').hidden = true
+  const box = $('roster')
+  box.hidden = false
+  box.replaceChildren()
+  for (const i of [0, 1] as const) {
+    const c = CREATURES[s.game.roster[i]]
+    const chip = document.createElement('button')
+    chip.className = 'rchip static'
+    chip.tabIndex = -1
+    const dot = document.createElement('i')
+    dot.style.background = c.color
+    dot.style.boxShadow = `0 0 10px ${c.color}`
+    const label = document.createElement('span')
+    const who = s.online ? (s.you === i ? 'You' : s.names[i]) : `Player ${i + 1}`
+    label.textContent = `${who} \u00B7 ${c.name}`
+    chip.append(dot, label)
+    box.append(chip)
+  }
+  updateCoopChips()
+}
+
+function updateCoopChips(): void {
+  const s = coopSession
+  if (!s) return
+  Array.from($('roster').children).forEach((el, i) => {
+    el.classList.toggle('active', s.game.turn === i && !s.game.won)
+    el.classList.toggle('away', s.online !== null && i !== s.you && !s.partnerOnline)
+  })
+}
+
+function announceTurn(s: CoopSession): void {
+  const who = s.game.turn
+  if (!s.online) showPill(`Player ${who + 1}'s turn`, 'info')
+  else if (who === s.you) showPill('Your turn', 'info')
+  else showPill(`Waiting for ${s.names[who]}`, 'info')
+}
+
+async function coopMove(action: CoopAction): Promise<void> {
+  const s = coopSession
+  if (!s || coopBusy || overlayOpen() || s.game.won) return
+  if (s.online && s.game.turn !== s.you) {
+    showPill(`Wait for ${s.names[s.game.turn]}`, 'bad')
+    return
+  }
+  const res = s.game.move(action)
+  if (!res) return // a slide that goes nowhere
+  s.online?.send({ t: 'move', a: action })
+  await playCoopResult(s, res)
+}
+
+async function playCoopResult(s: CoopSession, res: CoopResult): Promise<void> {
+  coopBusy = true
+  updateHud()
+  await view.animateMove(res, res.player)
+  coopBusy = false
+  if (coopSession !== s) return
+  vibrate(res.burned ? 25 : res.jumped ? 15 : 8)
+  updateHud()
+  if (res.won) {
+    hidePill()
+    vibrate([20, 40, 20, 40, 90])
+    view.celebrate()
+    coopWin(s)
+    return
+  }
+  announceTurn(s)
+}
+
+function coopRestart(): void {
+  const s = coopSession
+  if (!s) return
+  if (s.online) s.online.send({ t: 'restart' }) // the room tells both players
+  else loadCoop(s.n, null, null, s.names)
+}
+
+function coopWin(s: CoopSession): void {
+  $('par').textContent = String(par)
+  coopUnlocked = Math.max(coopUnlocked, s.n + 1)
+  writeJson('embigo-coop', coopUnlocked)
+  const moves = s.game.moves
+  const text = moves <= par ? `${moves} moves: perfect teamwork!` : `${moves} moves (par ${par}).`
+  const next: Action = s.online
+    ? { label: 'Next level', primary: true, run: () => s.online?.send({ t: 'next' }) }
+    : { label: 'Next level', primary: true, run: () => loadCoop(s.n + 1 > COOP_LEVEL_COUNT ? 1 : s.n + 1, null, null, s.names) }
+  showToast('Level cleared!', text, [next], stars(starsFor(moves, par)))
+}
+
+// ---------- co-op online: what the room tells us ----------
+
+function onRoomState(st: RoomState): void {
+  const names: [string, string] = [st.players[0]?.name ?? 'Player 1', st.players[1]?.name ?? 'Player 2']
+  const other = (1 - st.you) as 0 | 1
+  const partnerOnline = !!st.players[other]?.online
+  renderLobbyRoom(st)
+
+  const s = coopSession
+  if (!s) {
+    // both players are in the room: the game starts
+    if (st.players[0] && st.players[1] && roomClient) loadCoop(st.level, roomClient, st.you, names, st.history, partnerOnline)
+    return
+  }
+  const wasOnline = s.partnerOnline
+  s.names = names
+  s.you = st.you
+  s.partnerOnline = partnerOnline
+  if (wasOnline && !partnerOnline) showPill(`${names[other]} disconnected. Waiting...`, 'info', true)
+  else if (!wasOnline && partnerOnline) showPill(`${names[other]} is back`, 'info')
+  renderCoopChips(s)
+  syncHistory(s, st)
+}
+
+// Bring our game in line with the room: play the partner's moves, or rebuild after a restart
+function syncHistory(s: CoopSession, st: RoomState): void {
+  if (st.level !== s.n) {
+    loadCoop(st.level, s.online, st.you, s.names, st.history, s.partnerOnline)
+    return
+  }
+  const local = s.game.history.join('')
+  if (st.history === local) return
+  if (st.history.startsWith(local)) {
+    netQueue.push(...st.history.slice(local.length))
+    void drainNet()
+    return
+  }
+  loadCoop(st.level, s.online, st.you, s.names, st.history, s.partnerOnline)
+}
+
+async function drainNet(): Promise<void> {
+  if (draining) return
+  draining = true
+  while (netQueue.length > 0) {
+    const s = coopSession
+    if (!s) break
+    if (coopBusy) {
+      await sleep(30)
+      continue
+    }
+    const action = netQueue.shift() as CoopAction
+    const res = s.game.move(action)
+    if (res) await playCoopResult(s, res)
+  }
+  draining = false
+}
+
+let bubbleTimer = 0
+function showBubble(text: string): void {
+  const bubble = $('bubble')
+  bubble.textContent = text
+  bubble.classList.remove('hidden')
+  window.clearTimeout(bubbleTimer)
+  bubbleTimer = window.setTimeout(() => bubble.classList.add('hidden'), 2600)
+}
+
+function sendSignal(key: SignalKey): void {
+  if (!coopSession?.online) return
+  coopSession.online.send({ t: 'signal', k: key })
+  showBubble(`You: ${SIGNALS[key]}`)
+  vibrate(10)
+}
+
+// ---------- co-op lobby (create, join, share the code) ----------
+
+function setLobbyError(text: string): void {
+  $('lobby-error').textContent = text
+}
+
+function openLobby(): void {
+  closeMenu()
+  hideToast()
+  lobbyOpen = true
+  $('lobby').classList.remove('hidden')
+  const input = $('coop-name') as HTMLInputElement
+  if (!input.value) input.value = readJson<string>('embigo-name', '') || session?.nickname || ''
+  setLobbyError('')
+  renderLobby()
+}
+
+function closeLobby(): void {
+  lobbyOpen = false
+  $('lobby').classList.add('hidden')
+}
+
+function renderLobby(): void {
+  const inRoom = roomClient !== null
+  $('lobby-start').hidden = inRoom
+  $('lobby-room').hidden = !inRoom
+  $('coop-level').textContent = String(coopPick)
+  if (roomClient) $('room-code').textContent = roomClient.code
+}
+
+function renderLobbyRoom(st: RoomState): void {
+  const list = $('room-players')
+  list.replaceChildren()
+  st.players.forEach((p, i) => {
+    const li = document.createElement('li')
+    const dot = document.createElement('i')
+    dot.className = p?.online ? 'on' : 'off'
+    const name = document.createElement('span')
+    name.textContent = p ? `${p.name}${i === st.you ? ' (you)' : ''}` : 'Waiting for a friend...'
+    li.append(dot, name)
+    list.append(li)
+  })
+  $('room-status').textContent = st.players[0] && st.players[1] ? 'Both players are here!' : 'Send the code to your friend.'
+}
+
+function lobbyName(): string {
+  const typed = ($('coop-name') as HTMLInputElement).value.trim()
+  writeJson('embigo-name', typed)
+  return typed || session?.nickname || 'Player'
+}
+
+function joinRoom(code: string): void {
+  roomClient?.close()
+  const client = new RoomClient(code, lobbyName(), coopPick, {
+    onState: onRoomState,
+    onSignal: (_from, name, key) => {
+      showBubble(`${name}: ${SIGNALS[key]}`)
+      vibrate(15)
+    },
+    onError: (message) => {
+      if (lobbyOpen) setLobbyError(message)
+      else showPill(message, 'bad')
+      if (message === 'This room is full' && roomClient === client) {
+        client.close()
+        roomClient = null
+        renderLobby()
+      }
+    },
+    onStatus: (status) => {
+      if (!coopSession) return
+      if (status === 'offline') showPill('Connection lost. Reconnecting...', 'bad', true)
+      else if (status === 'online') hidePill()
+    },
+  })
+  roomClient = client
+  setLobbyError('')
+  renderLobby()
+  client.connect()
+}
+
+async function onCreateRoom(): Promise<void> {
+  setLobbyError('')
+  try {
+    joinRoom(await createRoom())
+  } catch (e) {
+    setLobbyError(e instanceof Error ? e.message : 'Could not create the room')
+  }
+}
+
+async function onJoinRoom(): Promise<void> {
+  const code = ($('coop-code') as HTMLInputElement).value.trim().toUpperCase()
+  if (!isRoomCode(code)) {
+    setLobbyError('A room code has 5 letters, like XHPNT')
+    return
+  }
+  try {
+    if ((await roomPlayers(code)) === 0) {
+      setLobbyError('Room not found. Check the code with your friend.')
+      return
+    }
+    joinRoom(code)
+  } catch (e) {
+    setLobbyError(e instanceof Error ? e.message : 'Could not join the room')
+  }
+}
+
+function leaveRoom(): void {
+  const playing = coopSession !== null
+  roomClient?.close()
+  roomClient = null
+  if (playing) startMode({ kind: 'campaign', n: campaign.unlocked })
+  setLobbyError('')
+  renderLobby()
+}
+
+async function shareRoom(copyOnly: boolean): Promise<void> {
+  if (!roomClient) return
+  const url = `${window.location.origin}/?room=${roomClient.code}`
+  if (!copyOnly && typeof navigator.share === 'function') {
+    try {
+      await navigator.share({ title: 'Embigo co-op', text: 'Join my Embigo room!', url })
+      return
+    } catch {
+      return // the player closed the share sheet
+    }
+  }
+  try {
+    await navigator.clipboard.writeText(url)
+    $('btn-copy-code').textContent = 'Copied!'
+  } catch {
+    $('btn-copy-code').textContent = url
+  }
+  window.setTimeout(() => ($('btn-copy-code').textContent = 'Copy link'), 1800)
+}
+
+
 // ---------- input ----------
 
 const KEYS: Record<string, Dir> = {
@@ -592,7 +981,8 @@ const KEYS: Record<string, Dir> = {
 }
 
 function closeTopOverlay(): void {
-  if (boardOpen) closeBoard()
+  if (lobbyOpen) closeLobby()
+  else if (boardOpen) closeBoard()
   else if (menuOpen) closeMenu()
   else if (introOpen) closeIntro()
 }
@@ -612,8 +1002,9 @@ window.addEventListener('keydown', (e) => {
   const dir = KEYS[key]
   if (dir) {
     e.preventDefault()
-    void tryMove(toGameDir(dir))
-  } else if (key === 'r') restart()
+    inputDir(toGameDir(dir))
+  } else if (key === 'p' && coopSession) void coopMove('P')
+  else if (key === 'r') restart()
   else if (key === 'm') openMenu()
   else if (key === 'n') randomPuzzle()
   else if (key === 'l') openBoard()
@@ -640,7 +1031,7 @@ canvas.addEventListener('pointermove', (e) => {
   if (Math.max(Math.abs(dx), Math.abs(dy)) < 28) return
   swipe.done = true
   const screen: Dir = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'R' : 'L') : dy > 0 ? 'D' : 'U'
-  void tryMove(toGameDir(screen), true)
+  inputDir(toGameDir(screen), true)
 })
 const endSwipe = () => {
   swipe = null
@@ -683,6 +1074,32 @@ $('btn-login').addEventListener('click', () => void authenticate('login'))
 $('btn-register').addEventListener('click', () => void authenticate('register'))
 $('btn-logout').addEventListener('click', () => void doLogout())
 
+
+$('btn-coop').addEventListener('click', openLobby)
+$('lobby-close').addEventListener('click', closeLobby)
+$('btn-coop-local').addEventListener('click', () => loadCoop(coopPick, null, null, ['Player 1', 'Player 2']))
+$('btn-coop-create').addEventListener('click', () => void onCreateRoom())
+$('btn-coop-join').addEventListener('click', () => void onJoinRoom())
+$('btn-leave-room').addEventListener('click', leaveRoom)
+$('btn-copy-code').addEventListener('click', () => void shareRoom(true))
+$('btn-share-code').addEventListener('click', () => void shareRoom(false))
+$('btn-pass').addEventListener('click', () => void coopMove('P'))
+$('coop-minus').addEventListener('click', () => {
+  coopPick = Math.max(1, coopPick - 1)
+  renderLobby()
+})
+$('coop-plus').addEventListener('click', () => {
+  coopPick = Math.min(Math.min(coopUnlocked, COOP_LEVEL_COUNT), coopPick + 1)
+  renderLobby()
+})
+$('signals').addEventListener('click', (e) => {
+  const key = (e.target as HTMLElement).closest('button')?.dataset.k
+  if (key) sendSignal(key as SignalKey)
+})
+$('coop-code').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') void onJoinRoom()
+})
+
 // ---------- start ----------
 
 let seen = false
@@ -703,3 +1120,11 @@ if (Number.isInteger(seedParam) && seedParam > 0) {
   startMode(next ? { kind: 'daily', day: dailySeed(), idx: next } : { kind: 'campaign', n: campaign.unlocked })
 }
 if (!seen) openIntro()
+
+// A link like /?room=XHPNT opens the co-op lobby with the code already filled in
+const roomParam = (new URLSearchParams(window.location.search).get('room') ?? '').toUpperCase()
+if (isRoomCode(roomParam)) {
+  closeIntro()
+  openLobby()
+  ;($('coop-code') as HTMLInputElement).value = roomParam
+}

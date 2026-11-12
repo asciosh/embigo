@@ -13,5 +13,5 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true
   },
-  "include": ["./*.ts", "../src/generator.ts", "../src/game.ts", "../src/puzzles.ts", "../src/puzzle-data.ts"]
+  "include": ["./*.ts", "../src/generator.ts", "../src/game.ts", "../src/puzzles.ts", "../src/puzzle-data.ts", "../src/coop.ts", "../src/coop-levels.ts", "../src/coop-data.ts"]
 }

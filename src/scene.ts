@@ -1,6 +1,7 @@
 import * as THREE from 'three'
-import type { Game, MoveResult, Pos } from './game'
+import type { Game, Pos } from './game'
 import type { Creature } from './generator'
+import type { CoopGame } from './coop'
 import { makeDrip, makeEmbi, makeZefi, type CreatureModel } from './creatures'
 
 type Spark = {
@@ -25,6 +26,18 @@ type Tween = {
 
 type Burning = { group: THREE.Group; pos: THREE.Vector3; start: number; fired: boolean }
 
+// One creature on the board (single player: one actor; co-op: two)
+type Actor = { model: CreatureModel; creature: Creature; tween: Tween | null; impactAt: number; popAt: number }
+
+// What the board needs to know to be drawn (both Game and CoopGame provide it)
+type BoardState = {
+  cols: number
+  rows: number
+  tile(x: number, y: number): string
+  isBush(x: number, y: number): boolean
+  wasBurnt(x: number, y: number): boolean
+}
+
 // Deterministic "random" number from an integer (for rock shapes etc.)
 function hash(n: number): number {
   const s = Math.sin(n * 127.1 + 311.7) * 43758.5453
@@ -47,17 +60,18 @@ export class View {
   private camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100)
   private levelGroup = new THREE.Group()
   private game: Game | null = null
-  private model: CreatureModel | null = null
-  private goalMesh: THREE.Mesh | null = null
+  private coop: CoopGame | null = null
+  private actors: Actor[] = []
+  private goalMeshes: THREE.Mesh[] = []
+  private plates: THREE.Mesh[] = []
+  private gates: THREE.Mesh[] = []
+  private turnRing: THREE.Mesh | null = null
   private lakes: { mesh: THREE.Mesh; baseY: number }[] = []
   private pads: THREE.Mesh[] = []
-  private popAt = -10
   private bushes = new Map<string, THREE.Group>()
   private burning: Burning[] = []
   private sparks: Spark[] = []
   private snow: THREE.Points
-  private tween: Tween | null = null
-  private impactAt = -10
   private cheerAt = -10
   private time = 0
   private canvas: HTMLCanvasElement
@@ -95,8 +109,9 @@ export class View {
   })
   private padMat = new THREE.MeshStandardMaterial({ color: 0x9b7bff, emissive: 0x5a3df0, emissiveIntensity: 0.5, roughness: 0.35 })
   private padRingMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xcdb8ff, emissiveIntensity: 0.8, roughness: 0.3 })
+  private plateMat = new THREE.MeshStandardMaterial({ color: 0xffb347, emissive: 0xff8a00, emissiveIntensity: 0.4, roughness: 0.4 })
+  private gateMat = new THREE.MeshStandardMaterial({ color: 0x6fb7e8, emissive: 0x2b7fc2, emissiveIntensity: 0.45, roughness: 0.2, transparent: true, opacity: 0.85 })
   private ashMat = new THREE.MeshStandardMaterial({ color: 0x7d8896, roughness: 1 })
-  private goalMat = new THREE.MeshStandardMaterial({ color: 0xffd166, emissive: 0xffb300, emissiveIntensity: 1.1, roughness: 0.2, flatShading: true })
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas
@@ -194,9 +209,10 @@ export class View {
     const portrait = this.camera.aspect < 1
     if (portrait !== this.portrait) {
       this.portrait = portrait
-      if (this.game) {
+      if (this.game || this.coop) {
         this.finishTween()
-        this.setLevel(this.game) // calls resize() again with the new orientation
+        if (this.coop) this.setCoopLevel(this.coop)
+        else if (this.game) this.setLevel(this.game) // calls resize() again with the new orientation
         return
       }
     }
@@ -224,7 +240,7 @@ export class View {
   private uiInsets(h: number): { top: number; bottom: number } {
     let top = 6
     let bottom = 6
-    for (const id of ['hud', 'creature', 'roster', 'controls']) {
+    for (const id of ['hud', 'creature', 'roster', 'controls', 'coopbar']) {
       const el = document.getElementById(id)
       if (!el) continue
       const r = el.getBoundingClientRect()
@@ -308,27 +324,27 @@ export class View {
   }
 
   private finishTween(): void {
-    if (!this.tween) return
-    const done = this.tween.resolve
-    this.tween = null
-    done()
+    for (const a of this.actors) {
+      if (!a.tween) continue
+      const done = a.tween.resolve
+      a.tween = null
+      done()
+    }
   }
 
   private cell(p: Pos): THREE.Vector3 {
-    const g = this.game!
-    const cx = p.x - (g.cols - 1) / 2
-    const cy = p.y - (g.rows - 1) / 2
+    const cx = p.x - (this.boardCols - 1) / 2
+    const cy = p.y - (this.boardRows - 1) / 2
     // portrait: game x runs down the screen and game y runs across it
     return this.portrait ? new THREE.Vector3(cy, 0, cx) : new THREE.Vector3(cx, 0, cy)
   }
 
-  // (Re)build the whole level from the game state
-  setLevel(game: Game): void {
-    this.game = game
-    this.boardCols = game.cols
-    this.boardRows = game.rows
+  // Camera, shadows and the board itself (floor, rocks, lakes, bushes, plates, gates)
+  private buildBoard(state: BoardState): void {
+    this.boardCols = state.cols
+    this.boardRows = state.rows
     const sh = this.sun.shadow.camera
-    const span = Math.max(game.cols, game.rows) / 2 + 2
+    const span = Math.max(state.cols, state.rows) / 2 + 2
     sh.left = -span
     sh.right = span
     sh.top = span
@@ -340,20 +356,22 @@ export class View {
     this.scene.add(this.levelGroup)
     this.lakes = []
     this.pads = []
-    this.popAt = -10
+    this.plates = []
+    this.gates = []
+    this.turnRing = null
+    this.goalMeshes = []
     this.bushes.clear()
     this.burning = []
-    this.tween = null
     this.cheerAt = -10
 
-    for (let y = 0; y < game.rows; y++) {
-      for (let x = 0; x < game.cols; x++) {
-        const t = game.tile(x, y)
+    for (let y = 0; y < state.rows; y++) {
+      for (let x = 0; x < state.cols; x++) {
+        const t = state.tile(x, y)
         const p = this.cell({ x, y })
-        const border = x === 0 || y === 0 || x === game.cols - 1 || y === game.rows - 1
+        const border = x === 0 || y === 0 || x === state.cols - 1 || y === state.rows - 1
         const n = x * 31 + y * 17
         const backEdge = this.portrait ? x === 0 : y === 0
-        const frontEdge = this.portrait ? x === game.cols - 1 : y === game.rows - 1
+        const frontEdge = this.portrait ? x === state.cols - 1 : y === state.rows - 1
 
         if (t === '#') {
           const scale = border ? 0.95 : 0.82
@@ -378,6 +396,20 @@ export class View {
           this.lakes.push({ mesh: water, baseY: -0.07 })
         } else {
           this.addTile(p, x, y)
+          if (t === 'P') {
+            const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.42, 0.05, 28), this.plateMat)
+            disc.position.set(p.x, 0.025, p.z)
+            disc.receiveShadow = true
+            this.levelGroup.add(disc)
+            this.plates.push(disc)
+          }
+          if (t === 'D') {
+            const gate = new THREE.Mesh(new THREE.BoxGeometry(0.92, 1, 0.92), this.gateMat)
+            gate.position.set(p.x, 0.5, p.z)
+            gate.castShadow = true
+            this.levelGroup.add(gate)
+            this.gates.push(gate)
+          }
           if (t === 'W') {
             const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.4, 0.06, 32), this.padMat)
             disc.position.set(p.x, 0.03, p.z)
@@ -390,7 +422,7 @@ export class View {
             this.pads.push(ring)
           }
           if (t === 'B') {
-            if (game.isBush(x, y)) {
+            if (state.isBush(x, y)) {
               const bush = new THREE.Group()
               bush.position.copy(p)
               const parts: [number, number, number, number][] = [
@@ -411,27 +443,62 @@ export class View {
             }
           }
         }
-        if (game.wasBurnt(x, y)) this.addAsh(p)
+        if (state.wasBurnt(x, y)) this.addAsh(p)
       }
     }
 
-    // goal crystal
-    const g = this.cell(game.goal)
-    this.goalMesh = new THREE.Mesh(new THREE.OctahedronGeometry(0.26), this.goalMat)
-    this.goalMesh.scale.y = 1.6
-    this.goalMesh.position.set(g.x, 0.5, g.z)
-    this.goalMesh.castShadow = true
-    const goalLight = new THREE.PointLight(0xffd166, 5, 4, 2)
-    goalLight.position.set(0, 0.3, 0)
-    this.goalMesh.add(goalLight)
-    this.levelGroup.add(this.goalMesh)
+  }
 
-    // creature
-    if (this.model) this.scene.remove(this.model.group)
-    this.model = makeModel(game.creature)
-    this.model.group.scale.setScalar(1.35)
-    this.model.group.position.copy(this.cell(game.pos))
-    this.scene.add(this.model.group)
+  // (Re)build the whole level from the single player game state
+  setLevel(game: Game): void {
+    this.game = game
+    this.coop = null
+    this.buildBoard(game)
+    this.addGoal(game.goal, 0xffd166, 0xffb300)
+    this.setActors([game.creature], [game.pos])
+  }
+
+  // The same for a co-op level: two creatures, two goals, a ring under the one whose turn it is
+  setCoopLevel(coop: CoopGame): void {
+    this.coop = coop
+    this.game = null
+    this.buildBoard(coop)
+    const tint = (c: Creature) => (c === 'fire' ? [0xff9a4d, 0xff6a00] : c === 'water' ? [0x7cc8ff, 0x1d8fff] : [0xeaf6ff, 0x9ad0ff])
+    this.addGoal(coop.goals[0], tint(coop.roster[0])[0], tint(coop.roster[0])[1])
+    this.addGoal(coop.goals[1], tint(coop.roster[1])[0], tint(coop.roster[1])[1])
+    this.setActors(coop.roster, coop.pos)
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(0.5, 0.045, 10, 40),
+      new THREE.MeshBasicMaterial({ color: 0xffe08a, transparent: true, opacity: 0.9 }),
+    )
+    ring.rotation.x = Math.PI / 2
+    this.levelGroup.add(ring)
+    this.turnRing = ring
+  }
+
+  private addGoal(pos: Pos, color: number, glow: number): void {
+    const g = this.cell(pos)
+    const mat = new THREE.MeshStandardMaterial({ color, emissive: glow, emissiveIntensity: 1.1, roughness: 0.2, flatShading: true })
+    const mesh = new THREE.Mesh(new THREE.OctahedronGeometry(0.26), mat)
+    mesh.scale.y = 1.6
+    mesh.position.set(g.x, 0.5, g.z)
+    mesh.castShadow = true
+    const light = new THREE.PointLight(color, 5, 4, 2)
+    light.position.set(0, 0.3, 0)
+    mesh.add(light)
+    this.levelGroup.add(mesh)
+    this.goalMeshes.push(mesh)
+  }
+
+  private setActors(creatures: Creature[], positions: Pos[]): void {
+    for (const a of this.actors) this.scene.remove(a.model.group)
+    this.actors = creatures.map((creature, i) => {
+      const model = makeModel(creature)
+      model.group.scale.setScalar(1.35)
+      model.group.position.copy(this.cell(positions[i]))
+      this.scene.add(model.group)
+      return { model, creature, tween: null, impactAt: -10, popAt: -10 }
+    })
   }
 
   private addTile(p: THREE.Vector3, x: number, y: number): void {
@@ -448,15 +515,17 @@ export class View {
     this.levelGroup.add(ash)
   }
 
-  // Smoothly slide the creature along the move that Game already computed
-  animateMove(res: MoveResult): Promise<void> {
+  // Smoothly slide a creature along the move that the game already computed
+  // (who = which creature: always 0 in single player, 0 or 1 in co-op)
+  animateMove(res: { from: Pos; to: Pos; burned: Pos | null; jumped: Pos | null }, who = 0): Promise<void> {
     return new Promise((resolve) => {
-      if (!this.game || !this.model) return resolve()
+      const actor = this.actors[who]
+      if (!actor) return resolve()
       const from = this.cell(res.from)
       const to = this.cell(res.to)
       const dist = Math.abs(res.to.x - res.from.x) + Math.abs(res.to.y - res.from.y)
       const dur = dist === 0 ? 0.3 : 0.12 + 0.07 * dist
-      this.tween = {
+      actor.tween = {
         from,
         to,
         start: this.time,
@@ -476,15 +545,16 @@ export class View {
   }
 
   // Little burst around the creature: green-gold for a best move, grey for a dead end
-  sparkle(kind: 'good' | 'bad'): void {
-    if (!this.model) return
-    const at = this.model.group.position.clone().setY(0.7)
+  sparkle(kind: 'good' | 'bad', who = 0): void {
+    const actor = this.actors[who]
+    if (!actor) return
+    const at = actor.model.group.position.clone().setY(0.7)
     if (kind === 'good') this.burst(at, 16, [0x7dffb0, 0xffd166, 0xffffff], 2.4, -0.6)
     else this.burst(at, 12, [0x8d99a6, 0x5b6190, 0xff8f8f], 1.8, 2)
   }
 
   // The part of a slide (0..1) during which Zefi is hopping over an obstacle
-  private hopOf(res: MoveResult, dist: number): { p0: number; p1: number } | null {
+  private hopOf(res: { from: Pos; jumped: Pos | null }, dist: number): { p0: number; p1: number } | null {
     if (!res.jumped || dist === 0) return null
     const over = Math.abs(res.jumped.x - res.from.x) + Math.abs(res.jumped.y - res.from.y)
     return { p0: (over - 1) / dist, p1: (over + 1) / dist }
@@ -492,22 +562,24 @@ export class View {
 
   // The player switched creature on a swap pad: same place, new model, a little puff
   swapModel(game: Game): void {
-    if (!this.model) return
-    const at = this.model.group.position.clone()
-    this.scene.remove(this.model.group)
-    this.model = makeModel(game.creature)
-    this.model.group.scale.setScalar(0.01)
-    this.model.group.position.copy(at)
-    this.scene.add(this.model.group)
-    this.popAt = this.time
+    const actor = this.actors[0]
+    if (!actor) return
+    const at = actor.model.group.position.clone()
+    this.scene.remove(actor.model.group)
+    actor.creature = game.creature
+    actor.model = makeModel(game.creature)
+    actor.model.group.scale.setScalar(0.01)
+    actor.model.group.position.copy(at)
+    this.scene.add(actor.model.group)
+    actor.popAt = this.time
     this.burst(at.clone().setY(0.6), 26, [...colorsOf(game.creature), 0xcdb8ff, 0xffffff], 3.2, 1.2)
   }
 
   celebrate(): void {
-    if (!this.game) return
     this.cheerAt = this.time
-    const g = this.cell(this.game.goal)
-    this.burst(g.clone().setY(0.6), 40, [0xffd166, 0xff7a1a, 0x7cc8ff, 0x7dffb0, 0xff8fb1], 4, 3)
+    for (const g of this.goalMeshes) {
+      this.burst(g.position.clone().setY(0.6), 40, [0xffd166, 0xff7a1a, 0x7cc8ff, 0x7dffb0, 0xff8fb1], 4, 3)
+    }
   }
 
   private burst(at: THREE.Vector3, count: number, colors: number[], speed: number, gravity: number): void {
@@ -528,7 +600,7 @@ export class View {
 
   // True when nothing is moving: on touch devices we then draw fewer frames to save battery
   private isIdle(): boolean {
-    return !this.tween && this.burning.length === 0 && this.time - this.cheerAt > 1.5 && !this.sparks.some((sp) => sp.life > 0)
+    return !this.actors.some((a) => a.tween) && this.burning.length === 0 && this.time - this.cheerAt > 1.5 && !this.sparks.some((sp) => sp.life > 0)
   }
 
   private frame(ms: number): void {
@@ -549,16 +621,19 @@ export class View {
   }
 
   private updateCreature(t: number, dt: number): void {
-    const m = this.model
-    if (!m || !this.game) return
+    for (const a of this.actors) this.updateActor(a, t, dt)
+  }
+
+  private updateActor(a: Actor, t: number, dt: number): void {
+    const m = a.model
     m.update(t)
 
     let leanZ = 0
     let leanX = 0
     let hop = 0
 
-    if (this.tween) {
-      const tw = this.tween
+    if (a.tween) {
+      const tw = a.tween
       const p = Math.min(1, Math.max(0, (t - tw.start) / tw.dur))
       const e = 1 - Math.pow(1 - p, 3)
       m.group.position.lerpVectors(tw.from, tw.to, e)
@@ -566,8 +641,8 @@ export class View {
       leanX = tw.dz * 0.28
       if (tw.from.equals(tw.to)) hop = Math.sin(p * Math.PI) * 0.2
 
-      const colors = colorsOf(this.game.creature)
-      this.burst(m.group.position.clone().setY(0.25), 1, colors, 0.8, this.game.creature === 'fire' ? -1.2 : this.game.creature === 'air' ? 0.4 : 5)
+      const colors = colorsOf(a.creature)
+      this.burst(m.group.position.clone().setY(0.25), 1, colors, 0.8, a.creature === 'fire' ? -1.2 : a.creature === 'air' ? 0.4 : 5)
       if (tw.hop) {
         const q = (e - tw.hop.p0) / (tw.hop.p1 - tw.hop.p0)
         if (q > 0 && q < 1) hop = Math.max(hop, Math.sin(q * Math.PI) * 0.9)
@@ -575,8 +650,8 @@ export class View {
 
       if (p >= 1) {
         const done = tw.resolve
-        this.tween = null
-        this.impactAt = t
+        a.tween = null
+        a.impactAt = t
         done()
       }
     }
@@ -588,7 +663,7 @@ export class View {
     m.group.position.y = hop
 
     // pop-in after a swap (overshoots a little, then settles at the normal size)
-    const pop = Math.min(1, Math.max(0, (t - this.popAt) / 0.4))
+    const pop = Math.min(1, Math.max(0, (t - a.popAt) / 0.4))
     if (pop < 1) {
       const c1 = 1.70158
       const c3 = c1 + 1
@@ -598,16 +673,32 @@ export class View {
     m.group.rotation.x += (leanX - m.group.rotation.x) * Math.min(1, dt * 14)
 
     // squash and stretch + idle breathing
-    const since = t - this.impactAt
+    const since = t - a.impactAt
     const k = Math.exp(-since * 9) * Math.sin(since * 28)
     const breathe = Math.sin(t * 3) * 0.018
     m.body.scale.set(1 + 0.16 * k - breathe * 0.5, 1 - 0.2 * k + breathe, 1 + 0.16 * k - breathe * 0.5)
   }
 
   private updateWorld(t: number, dt: number): void {
-    if (this.goalMesh) {
-      this.goalMesh.rotation.y += dt * 1.6
-      this.goalMesh.position.y = 0.5 + Math.sin(t * 2.5) * 0.07
+    this.goalMeshes.forEach((g, i) => {
+      g.rotation.y += dt * 1.6
+      g.position.y = 0.5 + Math.sin(t * 2.5 + i * 1.3) * 0.07
+    })
+
+    // co-op: gates lower while a creature stands on a plate, and a ring marks whose turn it is
+    if (this.coop) {
+      const open = this.coop.gatesOpen()
+      for (const g of this.gates) {
+        const target = open ? 0.06 : 1
+        g.scale.y += (target - g.scale.y) * Math.min(1, dt * 10)
+        g.position.y = 0.5 * g.scale.y
+      }
+      this.plateMat.emissiveIntensity = open ? 1.6 + Math.sin(t * 6) * 0.4 : 0.4
+      const turner = this.actors[this.coop.turn]
+      if (turner && this.turnRing) {
+        this.turnRing.position.set(turner.model.group.position.x, 0.04, turner.model.group.position.z)
+        this.turnRing.scale.setScalar(1 + Math.sin(t * 5) * 0.06)
+      }
     }
     // swap pads turn slowly and glow when the creature is standing on one
     const onPad = !!this.game && this.game.onPad()

@@ -40,6 +40,18 @@
 
     <div id="roster" hidden></div>
 
+    <div id="bubble" class="hidden"></div>
+    <div id="coopbar" hidden>
+      <button id="btn-pass">Pass turn</button>
+      <div id="signals">
+        <button data-k="hi" aria-label="Hi">&#128075;</button>
+        <button data-k="wait" aria-label="Wait">&#9995;</button>
+        <button data-k="go" aria-label="Go">&#128073;</button>
+        <button data-k="oops" aria-label="Oops">&#128517;</button>
+        <button data-k="nice" aria-label="Nice">&#127881;</button>
+      </div>
+    </div>
+
     <div id="pill" class="hidden"></div>
     <div id="toast" class="hidden"></div>
 
@@ -75,6 +87,9 @@
         <button id="btn-campaign" class="mode wide"><b id="camp-label">Start</b><span id="camp-sub"></span></button>
         <div id="levels"></div>
 
+        <h3>Co-op</h3>
+        <button id="btn-coop" class="mode wide"><b>Play with a friend</b><span>Same phone or online, taking turns</span></button>
+
         <h3>More</h3>
         <div class="row">
           <button id="btn-random" class="mode"><b>Random puzzle</b><span>Hints available</span></button>
@@ -87,6 +102,45 @@
         <div class="row">
           <button id="btn-vibe" class="mode" hidden><b id="vibe-label">Vibration: on</b><span>Feel your moves</span></button>
         </div>
+      </div>
+    </div>
+
+    <div id="lobby" class="overlay hidden">
+      <div class="card">
+        <button id="lobby-close" class="close" aria-label="Close">&times;</button>
+        <h2>Co-op</h2>
+        <p class="sub">Two creatures, one map. Take turns and help each other: nobody can finish alone.</p>
+
+        <div id="lobby-start">
+          <input id="coop-name" placeholder="Your name" maxlength="16" autocomplete="off" spellcheck="false" />
+          <div class="stepper">
+            <span>Level</span>
+            <button id="coop-minus" aria-label="Previous level">&minus;</button>
+            <b id="coop-level">1</b>
+            <button id="coop-plus" aria-label="Next level">+</button>
+          </div>
+          <div class="row">
+            <button id="btn-coop-local" class="mode"><b>Same phone</b><span>Pass it around</span></button>
+            <button id="btn-coop-create" class="mode"><b>Create room</b><span>Play online</span></button>
+          </div>
+          <div class="row">
+            <input id="coop-code" placeholder="ROOM CODE" maxlength="5" autocomplete="off" autocapitalize="characters" spellcheck="false" />
+            <button id="btn-coop-join">Join</button>
+          </div>
+        </div>
+
+        <div id="lobby-room" hidden>
+          <p class="sub">Room code</p>
+          <div id="room-code">-----</div>
+          <div class="row">
+            <button id="btn-copy-code">Copy link</button>
+            <button id="btn-share-code">Share</button>
+          </div>
+          <ul id="room-players"></ul>
+          <p id="room-status" class="sub">Send the code to your friend.</p>
+          <button id="btn-leave-room">Leave room</button>
+        </div>
+        <p id="lobby-error" class="error"></p>
       </div>
     </div>
 

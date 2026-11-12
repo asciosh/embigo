@@ -13,5 +13,9 @@
       "database_name": "embigo-db",
       "database_id": "c94d03f9-e1e5-4024-8bec-a3dce651cd79"
     }
-  ]
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "ROOMS", "class_name": "Room" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }]
 }
