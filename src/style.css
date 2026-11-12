@@ -1175,3 +1175,11 @@ button {
     white-space: nowrap;
   }
 }
+
+/* ---------- soft vignette over the 3D scene ---------- */
+#vignette {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 50% 52%, rgba(0, 0, 0, 0) 58%, rgba(2, 6, 16, 0.5) 100%);
+}

@@ -9,6 +9,10 @@ import { RoomClient, createRoom, isRoomCode, roomPlayers, type RoomState, type S
 import { ApiError, fetchLeaderboard, loadSession, login, logout, register, saveSession, submitScore, type Board, type Session } from './api'
 
 const canvas = document.getElementById('game') as HTMLCanvasElement
+// a soft dark vignette on the edges of the screen (cheap, drawn by the browser, not the GPU scene)
+const vignette = document.createElement('div')
+vignette.id = 'vignette'
+canvas.insertAdjacentElement('afterend', vignette)
 const view = new View(canvas)
 const $ = (id: string) => document.getElementById(id)!
 
@@ -220,6 +224,8 @@ function renderMenu(): void {
     grid.append(b)
   }
   $('hints-label').textContent = hintsOn ? 'Hints: on' : 'Hints: off'
+  const gfx = document.getElementById('gfx-label')
+  if (gfx) gfx.textContent = `Graphics: ${view.qualityLabel()}`
   $('btn-vibe').hidden = !canVibrate
   $('vibe-label').textContent = vibrationOn ? 'Vibration: on' : 'Vibration: off'
 }
@@ -315,7 +321,7 @@ function restart(): void {
     return
   }
   game.restart()
-  view.setLevel(game)
+  view.setLevel(game, false)
   streak = 0
   queued = null
   busy = false
@@ -479,11 +485,13 @@ async function tryMove(dir: Dir, buffered = false): Promise<void> {
   if (res.deadEnd) {
     streak = 0
     view.sparkle('bad')
+    view.setMood('worried', 4)
     showPill('Dead end: press R to restart', 'bad', true)
     vibrate([30, 50, 30])
   } else if (res.optimal === true) {
     streak++
     view.sparkle('good')
+    view.setMood('happy', 1.4)
     showPill(streak > 1 ? `Best move! x${streak}` : 'Best move!', 'good')
     vibrate(20)
   } else if (res.optimal === false) {
@@ -1109,6 +1117,25 @@ if (KOFI_OK) {
   $('btn-vibe').parentElement?.insertAdjacentElement('afterend', row)
 }
 
+{
+  const button = document.createElement('button')
+  button.id = 'btn-gfx'
+  button.className = 'mode wide'
+  const title = document.createElement('b')
+  title.id = 'gfx-label'
+  const hint = document.createElement('span')
+  hint.textContent = 'Auto lowers it by itself if your phone struggles'
+  button.append(title, hint)
+  button.addEventListener('click', () => {
+    view.setQualitySetting(view.nextQualitySetting())
+    title.textContent = `Graphics: ${view.qualityLabel()}`
+  })
+  const row = document.createElement('div')
+  row.className = 'row'
+  row.append(button)
+  $('btn-vibe').parentElement?.insertAdjacentElement('afterend', row)
+  title.textContent = `Graphics: ${view.qualityLabel()}`
+}
 $('btn-coop').addEventListener('click', openLobby)
 $('lobby-close').addEventListener('click', closeLobby)
 $('btn-coop-local').addEventListener('click', () => loadCoop(coopPick, null, null, ['Player 1', 'Player 2']))
