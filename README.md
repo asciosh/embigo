@@ -64,4 +64,4 @@ Copyright (c) 2026 Simone. All rights reserved. The source is public to be read,
 
 ## Support
 
-If you enjoy Embigo, you can [buy me a coffee on Ko-fi](https://ko-fi.com/nome).
+If you enjoy Embigo, you can [buy me a coffee on Ko-fi](https://ko-fi.com/asciosh).
