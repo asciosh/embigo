@@ -18,15 +18,15 @@ export type CreatureModel = {
 
 // ---------- small helpers ----------
 
-const std = (color: number, roughness = 0.5, extra: THREE.MeshStandardMaterialParameters = {}) =>
+export const std = (color: number, roughness = 0.5, extra: THREE.MeshStandardMaterialParameters = {}) =>
   new THREE.MeshStandardMaterial({ color, roughness, ...extra })
 
-const basic = (color: number, opacity = 1) => new THREE.MeshBasicMaterial({ color, transparent: opacity < 1, opacity })
+export const basic = (color: number, opacity = 1) => new THREE.MeshBasicMaterial({ color, transparent: opacity < 1, opacity })
 
-const sphere = (r: number, mat: THREE.Material, seg = 24) => new THREE.Mesh(new THREE.SphereGeometry(r, seg, Math.round(seg * 0.75)), mat)
+export const sphere = (r: number, mat: THREE.Material, seg = 24) => new THREE.Mesh(new THREE.SphereGeometry(r, seg, Math.round(seg * 0.75)), mat)
 
 // Paint a gradient from bottom to top on the vertices of a geometry
-function paintByHeight(geo: THREE.BufferGeometry, bottom: number, top: number): THREE.BufferGeometry {
+export function paintByHeight(geo: THREE.BufferGeometry, bottom: number, top: number): THREE.BufferGeometry {
   geo.computeBoundingBox()
   const bb = geo.boundingBox!
   const pos = geo.getAttribute('position')
@@ -46,7 +46,7 @@ function paintByHeight(geo: THREE.BufferGeometry, bottom: number, top: number): 
 }
 
 // Soft light that wraps around the silhouette (like a back light): it makes the shapes pop.
-function addRim(material: THREE.MeshStandardMaterial, color: number, power = 2.4, strength = 0.6): void {
+export function addRim(material: THREE.MeshStandardMaterial, color: number, power = 2.4, strength = 0.6): void {
   material.onBeforeCompile = (shader) => {
     shader.uniforms.rimColor = { value: new THREE.Color(color) }
     shader.uniforms.rimPower = { value: power }
@@ -62,14 +62,14 @@ function addRim(material: THREE.MeshStandardMaterial, color: number, power = 2.4
 }
 
 // A soft glowing shell around a shape (seen from outside, it looks like a halo)
-function aura(radius: number, color: number, opacity: number): THREE.Mesh {
+export function aura(radius: number, color: number, opacity: number): THREE.Mesh {
   return new THREE.Mesh(
     new THREE.SphereGeometry(radius, 24, 16),
     new THREE.MeshBasicMaterial({ color, transparent: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide }),
   )
 }
 
-function shadows(root: THREE.Object3D): void {
+export function shadows(root: THREE.Object3D): void {
   root.traverse((o) => {
     if (o instanceof THREE.Mesh && o.material instanceof THREE.MeshStandardMaterial) o.castShadow = true
   })
@@ -82,7 +82,7 @@ const hashN = (n: number) => {
 
 // ---------- the face ----------
 
-type FaceOptions = {
+export type FaceOptions = {
   eyeX: number
   eyeY: number
   eyeZ: number
@@ -96,7 +96,7 @@ type FaceOptions = {
   browColor: number
 }
 
-function makeFace(o: FaceOptions) {
+export function makeFace(o: FaceOptions) {
   const group = new THREE.Group()
   const white = std(0xffffff, 0.15, { emissive: 0xffffff, emissiveIntensity: 0.06 })
   const dark = std(0x0d0d14, 0.1)
@@ -251,7 +251,7 @@ function magma(): THREE.CanvasTexture {
 }
 
 // A flame: a smooth tapered shape drawn with a shader (bright core, soft edge, waving tip)
-function flameGeometry(height: number, width: number): THREE.LatheGeometry {
+export function flameGeometry(height: number, width: number): THREE.LatheGeometry {
   const pts: THREE.Vector2[] = []
   for (let i = 0; i <= 22; i++) {
     const t = i / 22
@@ -261,7 +261,7 @@ function flameGeometry(height: number, width: number): THREE.LatheGeometry {
   return new THREE.LatheGeometry(pts, 22)
 }
 
-function flameMaterial(time: { value: number }, height: number, seed: number, core: number[], edge: number[], alpha: number): THREE.ShaderMaterial {
+export function flameMaterial(time: { value: number }, height: number, seed: number, core: number[], edge: number[], alpha: number): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     uniforms: {
       uTime: time,
@@ -345,7 +345,7 @@ export function makeEmbi(): CreatureModel {
   auraBody.position.y = 0.42
   const auraCrown = aura(0.3, 0xffb347, 0.07)
   auraCrown.position.y = 0.85
-  body.add(auraBody, auraCrown)
+  body.add(auraCrown)
 
   // embers floating up from the crown
   const emberMat = new THREE.MeshBasicMaterial({ color: 0xffc266, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false })
@@ -354,6 +354,11 @@ export function makeEmbi(): CreatureModel {
     body.add(m)
     return { mesh: m, seed: i }
   })
+
+  const embiBelly = sphere(0.14, std(0xffe2a6, 0.45, { emissive: 0xffc870, emissiveIntensity: 0.15 }), 20)
+  embiBelly.scale.set(1.1, 0.9, 0.35)
+  embiBelly.position.set(0, 0.17, 0.29)
+  body.add(embiBelly)
 
   const armMat = std(0xff6d1f, 0.5, { emissive: 0xff3a00, emissiveIntensity: 0.25 })
   addRim(armMat, 0xffa040, 2.2, 0.5)
@@ -421,7 +426,7 @@ export function makeEmbi(): CreatureModel {
 
 // ---------- Drip: a shiny water drop ----------
 
-function dropGeometry(): THREE.LatheGeometry {
+export function dropGeometry(): THREE.LatheGeometry {
   // a classic teardrop curve: round at the bottom, a soft point at the top
   const pts: THREE.Vector2[] = []
   for (let i = 0; i <= 56; i++) {
@@ -451,7 +456,7 @@ export function makeDrip(): CreatureModel {
     envMapIntensity: 1.9,
   })
   addRim(water, 0xbfeaff, 2.0, 0.7)
-  const drop = new THREE.Mesh(paintByHeight(dropGeometry(), 0x1e78dc, 0x86d8ff), water)
+  const drop = new THREE.Mesh(paintByHeight(dropGeometry(), 0x1664cc, 0x5cbfff), water)
   drop.position.y = 0.05
   body.add(drop)
 
@@ -485,6 +490,11 @@ export function makeDrip(): CreatureModel {
   h2.position.set(-0.1, 0.36, 0.31)
   body.add(h1, h2)
 
+  const dripBelly = sphere(0.15, std(0xdff6ff, 0.25, { emissive: 0x9fdcff, emissiveIntensity: 0.15 }), 20)
+  dripBelly.scale.set(1, 1.1, 0.35)
+  dripBelly.position.set(0, 0.2, 0.22)
+  body.add(dripBelly)
+
   const armMat = new THREE.MeshPhysicalMaterial({ color: 0x2a8fe8, roughness: 0.1, clearcoat: 1, transparent: true, opacity: 0.92 })
   addRim(armMat, 0xbfeaff, 2.0, 0.6)
   const armL = sphere(0.08, armMat, 16)
@@ -506,7 +516,6 @@ export function makeDrip(): CreatureModel {
   const orbitMat = new THREE.MeshPhysicalMaterial({ color: 0x5cc0ff, roughness: 0.05, clearcoat: 1, transparent: true, opacity: 0.85 })
   const orbit = Array.from({ length: 3 }, (_, i) => {
     const m = sphere(0.04 - i * 0.008, orbitMat, 12)
-    group.add(m)
     return { mesh: m, seed: i }
   })
 
@@ -595,7 +604,7 @@ export function makeZefi(): CreatureModel {
     [-0.04, 0.9, -0.08, 0.08],
   ]
   const puffs = puffData.map(([x, y, z, r], i) => {
-    const geo = paintByHeight(new THREE.SphereGeometry(r, 32, 24), 0x9fc0e4, 0xe8f2fc)
+    const geo = paintByHeight(new THREE.SphereGeometry(r, 32, 24), 0x86a2de, 0xdfe9fc)
     const m = new THREE.Mesh(geo, cloud)
     m.position.set(x, y + lift, z)
     if (i === 0) m.scale.set(1.1, 0.95, 1)
@@ -611,7 +620,7 @@ export function makeZefi(): CreatureModel {
   }
 
   // feathered wings: four rounded feathers each, fanned out
-  const featherMat = new THREE.MeshStandardMaterial({ color: 0xd8e8f8, emissive: 0x7fb5e8, emissiveIntensity: 0.08, roughness: 0.55 })
+  const featherMat = new THREE.MeshStandardMaterial({ color: 0xc4d6f4, emissive: 0x7fa0e8, emissiveIntensity: 0.08, roughness: 0.55 })
   addRim(featherMat, 0xeaf6ff, 2.0, 0.5)
   const wings: THREE.Group[] = []
   for (const side of [-1, 1]) {
@@ -645,8 +654,7 @@ export function makeZefi(): CreatureModel {
 
   const halo = aura(0.62, 0xbfe3ff, 0.06)
   halo.position.y = 0.5 + lift
-  body.add(halo)
-  shadows(group)
+    shadows(group)
 
   const glow = new THREE.PointLight(0xbfe3ff, 1.8, 6, 2)
   glow.position.set(0, 2.0, 0.1)
