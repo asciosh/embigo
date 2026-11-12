@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { Game, MoveResult, Pos } from './game'
-import { makeDrip, makeEmbi, type CreatureModel } from './creatures'
+import type { Creature } from './generator'
+import { makeDrip, makeEmbi, makeZefi, type CreatureModel } from './creatures'
 
 type Spark = {
   mesh: THREE.Mesh
@@ -18,6 +19,7 @@ type Tween = {
   dur: number
   dx: number
   dz: number
+  hop: { p0: number; p1: number } | null // part of the slide (0..1) where Zefi is in the air
   resolve: () => void
 }
 
@@ -31,6 +33,13 @@ function hash(n: number): number {
 
 const FIRE_COLORS = [0xffa733, 0xffd166, 0xff5a1a]
 const WATER_COLORS = [0x7cc8ff, 0xbfe6ff, 0x3fa9ff]
+const AIR_COLORS = [0xffffff, 0xcfe9ff, 0xa8d4ff]
+
+function makeModel(creature: Creature): CreatureModel {
+  return creature === 'fire' ? makeEmbi() : creature === 'water' ? makeDrip() : makeZefi()
+}
+
+const colorsOf = (c: Creature) => (c === 'fire' ? FIRE_COLORS : c === 'water' ? WATER_COLORS : AIR_COLORS)
 
 export class View {
   private renderer: THREE.WebGLRenderer
@@ -41,6 +50,8 @@ export class View {
   private model: CreatureModel | null = null
   private goalMesh: THREE.Mesh | null = null
   private lakes: { mesh: THREE.Mesh; baseY: number }[] = []
+  private pads: THREE.Mesh[] = []
+  private popAt = -10
   private bushes = new Map<string, THREE.Group>()
   private burning: Burning[] = []
   private sparks: Spark[] = []
@@ -82,6 +93,8 @@ export class View {
     transparent: true,
     opacity: 0.88,
   })
+  private padMat = new THREE.MeshStandardMaterial({ color: 0x9b7bff, emissive: 0x5a3df0, emissiveIntensity: 0.5, roughness: 0.35 })
+  private padRingMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xcdb8ff, emissiveIntensity: 0.8, roughness: 0.3 })
   private ashMat = new THREE.MeshStandardMaterial({ color: 0x7d8896, roughness: 1 })
   private goalMat = new THREE.MeshStandardMaterial({ color: 0xffd166, emissive: 0xffb300, emissiveIntensity: 1.1, roughness: 0.2, flatShading: true })
 
@@ -211,7 +224,7 @@ export class View {
   private uiInsets(h: number): { top: number; bottom: number } {
     let top = 6
     let bottom = 6
-    for (const id of ['hud', 'creature', 'controls']) {
+    for (const id of ['hud', 'creature', 'roster', 'controls']) {
       const el = document.getElementById(id)
       if (!el) continue
       const r = el.getBoundingClientRect()
@@ -326,6 +339,8 @@ export class View {
     this.levelGroup = new THREE.Group()
     this.scene.add(this.levelGroup)
     this.lakes = []
+    this.pads = []
+    this.popAt = -10
     this.bushes.clear()
     this.burning = []
     this.tween = null
@@ -363,6 +378,17 @@ export class View {
           this.lakes.push({ mesh: water, baseY: -0.07 })
         } else {
           this.addTile(p, x, y)
+          if (t === 'W') {
+            const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.4, 0.06, 32), this.padMat)
+            disc.position.set(p.x, 0.03, p.z)
+            disc.receiveShadow = true
+            this.levelGroup.add(disc)
+            const ring = new THREE.Mesh(new THREE.TorusGeometry(0.29, 0.028, 10, 40), this.padRingMat)
+            ring.rotation.x = Math.PI / 2
+            ring.position.set(p.x, 0.08, p.z)
+            this.levelGroup.add(ring)
+            this.pads.push(ring)
+          }
           if (t === 'B') {
             if (game.isBush(x, y)) {
               const bush = new THREE.Group()
@@ -402,7 +428,7 @@ export class View {
 
     // creature
     if (this.model) this.scene.remove(this.model.group)
-    this.model = game.creature === 'fire' ? makeEmbi() : makeDrip()
+    this.model = makeModel(game.creature)
     this.model.group.scale.setScalar(1.35)
     this.model.group.position.copy(this.cell(game.pos))
     this.scene.add(this.model.group)
@@ -437,6 +463,7 @@ export class View {
         dur,
         dx: Math.sign(to.x - from.x),
         dz: Math.sign(to.z - from.z),
+        hop: this.hopOf(res, dist),
         resolve,
       }
       if (res.burned) {
@@ -454,6 +481,26 @@ export class View {
     const at = this.model.group.position.clone().setY(0.7)
     if (kind === 'good') this.burst(at, 16, [0x7dffb0, 0xffd166, 0xffffff], 2.4, -0.6)
     else this.burst(at, 12, [0x8d99a6, 0x5b6190, 0xff8f8f], 1.8, 2)
+  }
+
+  // The part of a slide (0..1) during which Zefi is hopping over an obstacle
+  private hopOf(res: MoveResult, dist: number): { p0: number; p1: number } | null {
+    if (!res.jumped || dist === 0) return null
+    const over = Math.abs(res.jumped.x - res.from.x) + Math.abs(res.jumped.y - res.from.y)
+    return { p0: (over - 1) / dist, p1: (over + 1) / dist }
+  }
+
+  // The player switched creature on a swap pad: same place, new model, a little puff
+  swapModel(game: Game): void {
+    if (!this.model) return
+    const at = this.model.group.position.clone()
+    this.scene.remove(this.model.group)
+    this.model = makeModel(game.creature)
+    this.model.group.scale.setScalar(0.01)
+    this.model.group.position.copy(at)
+    this.scene.add(this.model.group)
+    this.popAt = this.time
+    this.burst(at.clone().setY(0.6), 26, [...colorsOf(game.creature), 0xcdb8ff, 0xffffff], 3.2, 1.2)
   }
 
   celebrate(): void {
@@ -519,8 +566,12 @@ export class View {
       leanX = tw.dz * 0.28
       if (tw.from.equals(tw.to)) hop = Math.sin(p * Math.PI) * 0.2
 
-      const colors = this.game.creature === 'fire' ? FIRE_COLORS : WATER_COLORS
-      this.burst(m.group.position.clone().setY(0.25), 1, colors, 0.8, this.game.creature === 'fire' ? -1.2 : 5)
+      const colors = colorsOf(this.game.creature)
+      this.burst(m.group.position.clone().setY(0.25), 1, colors, 0.8, this.game.creature === 'fire' ? -1.2 : this.game.creature === 'air' ? 0.4 : 5)
+      if (tw.hop) {
+        const q = (e - tw.hop.p0) / (tw.hop.p1 - tw.hop.p0)
+        if (q > 0 && q < 1) hop = Math.max(hop, Math.sin(q * Math.PI) * 0.9)
+      }
 
       if (p >= 1) {
         const done = tw.resolve
@@ -535,6 +586,14 @@ export class View {
     if (c >= 0 && c < 1.4) hop = Math.abs(Math.sin(c * 9)) * 0.28
 
     m.group.position.y = hop
+
+    // pop-in after a swap (overshoots a little, then settles at the normal size)
+    const pop = Math.min(1, Math.max(0, (t - this.popAt) / 0.4))
+    if (pop < 1) {
+      const c1 = 1.70158
+      const c3 = c1 + 1
+      m.group.scale.setScalar(1.35 * Math.max(0.01, 1 + c3 * Math.pow(pop - 1, 3) + c1 * Math.pow(pop - 1, 2)))
+    }
     m.group.rotation.z += (leanZ - m.group.rotation.z) * Math.min(1, dt * 14)
     m.group.rotation.x += (leanX - m.group.rotation.x) * Math.min(1, dt * 14)
 
@@ -550,6 +609,10 @@ export class View {
       this.goalMesh.rotation.y += dt * 1.6
       this.goalMesh.position.y = 0.5 + Math.sin(t * 2.5) * 0.07
     }
+    // swap pads turn slowly and glow when the creature is standing on one
+    const onPad = !!this.game && this.game.onPad()
+    this.padRingMat.emissiveIntensity = onPad ? 1.8 + Math.sin(t * 6) * 0.5 : 0.8
+    for (const ring of this.pads) ring.rotation.z += dt * (onPad ? 3 : 0.8)
     this.lakes.forEach((l, i) => {
       l.mesh.position.y = l.baseY + Math.sin(t * 2 + i * 1.7) * 0.012
     })

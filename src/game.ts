@@ -2,6 +2,8 @@ import { remainingMoves, type Creature } from './generator'
 
 export type Pos = { x: number; y: number }
 export type Dir = 'U' | 'D' | 'L' | 'R'
+// A move is a direction, or a digit: "0", "1", "2" = switch to roster[0], roster[1], roster[2]
+export type Action = Dir | '0' | '1' | '2'
 
 const DELTA: Record<Dir, [number, number]> = {
   U: [0, -1],
@@ -15,6 +17,7 @@ export type MoveResult = {
   from: Pos
   to: Pos
   burned: Pos | null
+  jumped: Pos | null // the obstacle Zefi hopped over, if any
   won: boolean
   // Only when move tracking is on: was this move on a shortest path to the goal?
   optimal: boolean | null
@@ -22,33 +25,41 @@ export type MoveResult = {
   deadEnd: boolean
 }
 
+export type SwapResult = { index: number; optimal: boolean | null; deadEnd: boolean }
+
 // Pure game rules: no drawing, no browser APIs.
-// The same code can later run on the server to verify leaderboard scores.
+// The same code runs in the browser and on the server (to verify leaderboard scores).
 export class Game {
   readonly level: string[]
-  readonly creature: Creature
+  readonly roster: Creature[]
   readonly cols: number
   readonly rows: number
   readonly start: Pos
   readonly goal: Pos
   pos: Pos
+  active = 0 // index in the roster of the creature you are playing now
   moves = 0
   won = false
-  history: Dir[] = []
+  history: Action[] = []
   // Moves left on the shortest path to the goal (only when tracking is on).
   // null means the goal can no longer be reached.
   remaining: number | null = null
   private tracking = false
   private burnt = new Set<string>()
 
-  constructor(level: string[], creature: Creature) {
+  constructor(level: string[], roster: Creature | Creature[]) {
     this.level = level
-    this.creature = creature
+    this.roster = Array.isArray(roster) ? roster : [roster]
     this.rows = level.length
     this.cols = level[0].length
     this.start = this.find('E')
     this.goal = this.find('G')
     this.pos = { ...this.start }
+  }
+
+  // The creature you are playing right now
+  get creature(): Creature {
+    return this.roster[this.active]
   }
 
   private find(symbol: string): Pos {
@@ -68,7 +79,7 @@ export class Game {
 
   private computeRemaining(): number | null {
     if (this.won) return 0
-    return remainingMoves(this.level, this.creature, this.pos, this.burnt)
+    return remainingMoves(this.level, this.roster, this.active, this.pos, this.burnt)
   }
 
   tile(x: number, y: number): string {
@@ -90,18 +101,47 @@ export class Game {
     return this.isBush(x, y)
   }
 
+  // True when the creature is standing on a swap pad
+  onPad(): boolean {
+    return this.tile(this.pos.x, this.pos.y) === 'W'
+  }
+
+  // Where a slide in this direction ends, and which obstacle (if any) Zefi hopped over
+  private slide(dx: number, dy: number): { x: number; y: number; jumped: Pos | null } {
+    let { x, y } = this.pos
+    let jumped: Pos | null = null
+    const canJump = this.creature === 'air'
+    for (;;) {
+      const nx = x + dx
+      const ny = y + dy
+      if (!this.isBlocked(nx, ny)) {
+        x = nx
+        y = ny
+        if (x === this.goal.x && y === this.goal.y) break
+        continue
+      }
+      if (canJump && jumped === null) {
+        const lx = nx + dx
+        const ly = ny + dy
+        if (!this.isBlocked(lx, ly)) {
+          jumped = { x: nx, y: ny }
+          x = lx
+          y = ly
+          if (x === this.goal.x && y === this.goal.y) break
+          continue
+        }
+      }
+      break
+    }
+    return { x, y, jumped }
+  }
+
   // Slide in a direction. Returns null if nothing happens.
   move(dir: Dir): MoveResult | null {
     if (this.won) return null
     const [dx, dy] = DELTA[dir]
     const from = { ...this.pos }
-    let { x, y } = this.pos
-
-    while (!this.isBlocked(x + dx, y + dy)) {
-      x += dx
-      y += dy
-      if (x === this.goal.x && y === this.goal.y) break
-    }
+    const { x, y, jumped } = this.slide(dx, dy)
 
     const atGoal = x === this.goal.x && y === this.goal.y
 
@@ -119,19 +159,47 @@ export class Game {
     this.won = atGoal
     this.history.push(dir)
 
-    let optimal: boolean | null = null
-    let deadEnd = false
-    if (this.tracking) {
-      const before = this.remaining
-      this.remaining = this.computeRemaining()
-      optimal = before !== null && this.remaining !== null && this.remaining === before - 1
-      deadEnd = this.remaining === null
+    const { optimal, deadEnd } = this.track()
+    return { dir, from, to: { x, y }, burned, jumped, won: atGoal, optimal, deadEnd }
+  }
+
+  // Switch to another creature of the roster. Only possible while standing on a swap pad,
+  // and it costs one move.
+  swapTo(index: number): SwapResult | null {
+    if (this.won || index === this.active || index < 0 || index >= this.roster.length) return null
+    if (!this.onPad()) return null
+    this.active = index
+    this.moves++
+    this.history.push(String(index) as Action)
+    const { optimal, deadEnd } = this.track()
+    return { index, optimal, deadEnd }
+  }
+
+  // Play one action of the history (used by the server to replay a score)
+  apply(action: string): boolean {
+    if (action === 'U' || action === 'D' || action === 'L' || action === 'R') return this.move(action) !== null
+    if (action === '0' || action === '1' || action === '2') return this.swapTo(Number(action)) !== null
+    return false
+  }
+
+  private track(): { optimal: boolean | null; deadEnd: boolean } {
+    if (!this.tracking) return { optimal: null, deadEnd: false }
+    const before = this.remaining
+    this.remaining = this.computeRemaining()
+    return {
+      optimal: before !== null && this.remaining !== null && this.remaining === before - 1,
+      deadEnd: this.remaining === null,
     }
-    return { dir, from, to: { x, y }, burned, won: atGoal, optimal, deadEnd }
+  }
+
+  // A text key of the whole state (used by tests)
+  stateKey(): string {
+    return `${this.pos.x},${this.pos.y}|${this.active}|${[...this.burnt].sort().join(';')}`
   }
 
   restart(): void {
     this.pos = { ...this.start }
+    this.active = 0
     this.moves = 0
     this.won = false
     this.history = []

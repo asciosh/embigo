@@ -1,5 +1,5 @@
 import './style.css'
-import { campaignLevel, dailyLevels, dailySeed, randomLevel, type GeneratedLevel } from './generator'
+import { campaignLevel, dailyLevels, dailySeed, randomLevel, type Creature, type GeneratedLevel } from './generator'
 import { Game, type Dir } from './game'
 import { View } from './scene'
 import { ApiError, fetchLeaderboard, loadSession, login, logout, register, saveSession, submitScore, type Board, type Session } from './api'
@@ -23,9 +23,10 @@ function toGameDir(screen: Dir): Dir {
   return { R: 'D', L: 'U', D: 'R', U: 'L' }[screen] as Dir
 }
 
-const CREATURES = {
+const CREATURES: Record<Creature, { name: string; power: string; color: string }> = {
   fire: { name: 'Embi', power: 'Fire sprite: burns bushes', color: '#ff7a1a' },
   water: { name: 'Drip', power: 'Water sprite: swims across lakes', color: '#3fa9ff' },
+  air: { name: 'Zefi', power: 'Air sprite: hops over one obstacle', color: '#bfe3ff' },
 }
 
 type Mode =
@@ -180,7 +181,8 @@ function renderMenu(): void {
   const [l1, l2] = todayLevels(dailySeed())
   const status = (i: 0 | 1, l: GeneratedLevel) => {
     const best = daily.best[i]
-    return best === null ? `${CREATURES[l.creature].name} · not played` : `${CREATURES[l.creature].name} · ${best} moves`
+    const names = l.roster.map((c) => CREATURES[c].name).join(' + ')
+    return best === null ? `${names} · not played` : `${names} · ${best} moves`
   }
   $('d1-status').textContent = status(0, l1)
   $('d2-status').textContent = status(1, l2)
@@ -235,12 +237,47 @@ function labelFor(m: Mode): string {
 
 function updateHud(): void {
   $('moves').textContent = String(game.moves)
+  updateRoster()
+}
+
+// Creature chips (only in levels with swap pads): tap one while standing on a pad to switch
+function renderRoster(): void {
+  const multi = game.roster.length > 1
+  $('creature').hidden = multi
+  $('roster').hidden = !multi
+  const box = $('roster')
+  box.replaceChildren()
+  if (!multi) return
+  game.roster.forEach((c, i) => {
+    const b = document.createElement('button')
+    b.className = 'rchip'
+    const dot = document.createElement('i')
+    dot.style.background = CREATURES[c].color
+    dot.style.boxShadow = `0 0 10px ${CREATURES[c].color}`
+    const name = document.createElement('span')
+    name.textContent = CREATURES[c].name
+    const key = document.createElement('small')
+    key.textContent = String(i + 1)
+    b.append(dot, name, key)
+    b.addEventListener('click', () => void trySwap(i))
+    box.append(b)
+  })
+  updateRoster()
+}
+
+function updateRoster(): void {
+  if (game.roster.length < 2) return
+  const onPad = game.onPad()
+  Array.from($('roster').children).forEach((el, i) => {
+    el.classList.toggle('active', i === game.active)
+    el.classList.toggle('ready', onPad && i !== game.active)
+  })
 }
 
 function startMode(m: Mode): void {
   mode = m
   const level = levelFor(m)
-  game = new Game(level.rows, level.creature)
+  game = new Game(level.rows, level.roster)
   game.setTracking(hintsActive())
   par = level.moves
   streak = 0
@@ -257,6 +294,7 @@ function startMode(m: Mode): void {
   $('dot').style.boxShadow = `0 0 12px ${c.color}`
   hideToast()
   hidePill()
+  renderRoster()
   updateHud()
 }
 
@@ -268,6 +306,7 @@ function restart(): void {
   busy = false
   hideToast()
   hidePill()
+  renderRoster()
   updateHud()
 }
 
@@ -356,6 +395,32 @@ async function onWin(): Promise<void> {
   }
 }
 
+async function trySwap(index: number): Promise<void> {
+  if (overlayOpen() || busy || index === game.active || index >= game.roster.length) return
+  if (!game.onPad()) {
+    showPill('Stop on a swap pad to switch', 'bad')
+    return
+  }
+  const res = game.swapTo(index)
+  if (!res) return
+  queued = null
+  updateHud()
+  view.swapModel(game)
+  vibrate(25)
+  if (res.deadEnd) {
+    streak = 0
+    view.sparkle('bad')
+    showPill('Dead end: press R to restart', 'bad', true)
+  } else if (res.optimal === true) {
+    streak++
+    view.sparkle('good')
+    showPill(streak > 1 ? `Best move! x${streak}` : 'Best move!', 'good')
+  } else if (res.optimal === false) {
+    streak = 0
+    hidePill()
+  }
+}
+
 async function tryMove(dir: Dir, buffered = false): Promise<void> {
   if (overlayOpen()) return
   if (busy) {
@@ -368,7 +433,8 @@ async function tryMove(dir: Dir, buffered = false): Promise<void> {
   updateHud()
   await view.animateMove(res)
   busy = false
-  vibrate(res.burned ? 25 : 8)
+  updateRoster()
+  vibrate(res.burned ? 25 : res.jumped ? 15 : 8)
 
   if (res.won) {
     queued = null
@@ -552,6 +618,7 @@ window.addEventListener('keydown', (e) => {
   else if (key === 'n') randomPuzzle()
   else if (key === 'l') openBoard()
   else if (key === 'h') toggleHints()
+  else if (key === '1' || key === '2' || key === '3') void trySwap(Number(key) - 1)
 })
 
 // Swipe on the board: the move starts as soon as the finger has moved a little,

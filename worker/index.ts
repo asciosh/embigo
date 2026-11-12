@@ -1,6 +1,6 @@
 import { dayNumber } from '../src/generator'
 import { getDailyPuzzles } from '../src/puzzles'
-import { Game, type Dir } from '../src/game'
+import { Game } from '../src/game'
 
 type Env = {
   DB: D1Database
@@ -156,16 +156,16 @@ async function submitScore(request: Request, env: Env): Promise<Response> {
   const idx = body?.idx === 1 || body?.idx === 2 ? body.idx : 0
   const moves = typeof body?.moves === 'string' ? body.moves : ''
   if (!idx) return fail('Invalid puzzle')
-  if (!/^[UDLR]{1,300}$/.test(moves)) return fail('Invalid moves')
+  if (!/^[UDLR012]{1,300}$/.test(moves)) return fail('Invalid moves')
 
   const yesterday = new Date()
   yesterday.setUTCDate(yesterday.getUTCDate() - 1)
   if (day !== dayNumber() && day !== dayNumber(yesterday)) return fail('That puzzle is closed')
 
   const puzzle = getDailyPuzzles(day)[idx - 1]
-  const game = new Game(puzzle.rows, puzzle.creature)
+  const game = new Game(puzzle.rows, puzzle.roster)
   for (const ch of moves) {
-    if (!game.move(ch as Dir)) return fail('Those moves do not match this puzzle')
+    if (!game.apply(ch)) return fail('Those moves do not match this puzzle')
   }
   if (!game.won) return fail('Those moves do not solve this puzzle')
 
