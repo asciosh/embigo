@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { THEMES, type Theme } from './config'
 import type { Game, Pos } from './game'
 import type { Creature } from './generator'
 import type { CoopGame } from './coop'
@@ -407,6 +408,13 @@ export class View {
     requestAnimationFrame((ms) => this.frame(ms))
   }
 
+  setTheme(t: Theme): void {
+    const th = THEMES[t]
+    if (!th) return
+    this.scene.background = new THREE.Color(th.fog)
+    this.scene.fog = new THREE.FogExp2(th.fog, 0.035)
+    this.sun.color = new THREE.Color(th.ambient)
+  }
   // ---------- graphics quality ----------
 
   private buildComposer(): void {

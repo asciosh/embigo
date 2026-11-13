@@ -80,6 +80,8 @@ let session: Session | null = loadSession()
 let pending: { day: number; idx: 1 | 2; moves: string }[] = []
 let dailyCache: { day: number; levels: [GeneratedLevel, GeneratedLevel] } | null = null
 
+let theme: 'classic' | 'deep' | 'volcano' = readJson('embigo-theme', 'classic')
+let motionOn = readJson('embigo-motion', true)
 let introOpen = false
 let menuOpen = false
 let boardOpen = false
@@ -248,6 +250,8 @@ function levelFor(m: Mode): GeneratedLevel {
   if (m.kind === 'campaign') return campaignLevel(m.n)
   if (m.kind === 'rogue') return rogueLevel(rogue ?? newRun(1, false))
   return randomLevel(m.seed)
+  $('btn-theme').querySelector('b')!.textContent = `Theme: ${theme.charAt(0).toUpperCase() + theme.slice(1)}`
+  $('btn-motion').querySelector('b')!.textContent = `Motion: ${motionOn ? 'on' : 'off'}`
 }
 
 const hintsActive = () => (mode.kind === 'rogue' ? !!rogue?.oracle : hintsOn && mode.kind !== 'daily')
@@ -1185,6 +1189,17 @@ $('btn-campaign').addEventListener('click', () => {
 $('btn-login').addEventListener('click', () => void authenticate('login'))
 $('btn-register').addEventListener('click', () => void authenticate('register'))
 $('btn-logout').addEventListener('click', () => void doLogout())
+$('btn-theme').addEventListener('click', () => {
+  theme = theme === 'classic' ? 'deep' : theme === 'deep' ? 'volcano' : 'classic'
+  writeJson('embigo-theme', theme)
+  view.setTheme(theme)
+  renderMenu()
+})
+$('btn-motion').addEventListener('click', () => {
+  motionOn = !motionOn
+  writeJson('embigo-motion', motionOn)
+  renderMenu()
+})
 
 
 if (KOFI_OK) {
