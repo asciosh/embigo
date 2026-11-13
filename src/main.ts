@@ -8,6 +8,7 @@ import { coopLevel, COOP_LEVEL_COUNT } from './coop-levels'
 import { RoomClient, createRoom, isRoomCode, roomPlayers, type RoomState, type SignalKey } from './online'
 import { KIND_LABEL, RELICS, budgetFor, canUndo, clearFloor, failFloor, floorKind, newRun, pickRelic, rogueCoopLevel, rogueLevel, skipFloor, useUndo, type RunState } from './rogue'
 import { ApiError, fetchLeaderboard, loadSession, login, logout, register, saveSession, submitScore, type Board, type Session } from './api'
+import { initAudioOnGesture, sfxMove, sfxBurn, sfxJump, sfxWin, sfxDeadEnd, sfxRelic, sfxFail, sfxShield, sfxPerfect, getAudioState, setAudio, isAudioOn } from './audio'
 
 const canvas = document.getElementById('game') as HTMLCanvasElement
 // a soft dark vignette on the edges of the screen (cheap, drawn by the browser, not the GPU scene)
@@ -98,7 +99,15 @@ let introOpen = false
 let menuOpen = false
 let boardOpen = false
 let lobbyOpen = false
+let audioInitialized = false
 const overlayOpen = () => introOpen || menuOpen || boardOpen || lobbyOpen || rogueOpen
+
+function ensureAudio(): void {
+  if (!audioInitialized) {
+    audioInitialized = true
+    initAudioOnGesture()
+  }
+}
 
 function todayLevels(day: number): [GeneratedLevel, GeneratedLevel] {
   if (!dailyCache || dailyCache.day !== day) dailyCache = { day, levels: dailyLevels(day) }
@@ -238,6 +247,8 @@ function renderMenu(): void {
   if (gfx) gfx.textContent = `Graphics: ${view.qualityLabel()}`
   $('btn-vibe').hidden = !canVibrate
   $('vibe-label').textContent = vibrationOn ? 'Vibration: on' : 'Vibration: off'
+  const audioState = getAudioState()
+  $('audio-label').textContent = (audioState.sfx && audioState.music) ? 'Audio: on' : 'Audio: off'
 }
 
 // ---------- puzzles ----------
@@ -498,12 +509,17 @@ async function tryMove(dir: Dir, buffered = false): Promise<void> {
   }
   const res = game.move(dir)
   if (!res) return
+  ensureAudio()
   busy = true
   updateHud()
   await view.animateMove(res)
   busy = false
   updateRoster()
   vibrate(res.burned ? 25 : res.jumped ? 15 : 8)
+  // Sound effects
+  if (res.burned) sfxBurn()
+  else if (res.jumped) sfxJump()
+  else sfxMove()
 
   if (mode.kind === 'rogue' && rogue && game.moves > budgetNow()) {
     await rogueFail('You ran out of moves.')
@@ -513,6 +529,7 @@ async function tryMove(dir: Dir, buffered = false): Promise<void> {
     queued = null
     hidePill()
     vibrate([20, 40, 20, 40, 90])
+    sfxWin()
     await onWin()
     return
   }
@@ -522,12 +539,14 @@ async function tryMove(dir: Dir, buffered = false): Promise<void> {
     view.setMood('worried', 4)
     showPill('Dead end: press R to restart', 'bad', true)
     vibrate([30, 50, 30])
+    sfxDeadEnd()
   } else if (res.optimal === true) {
     streak++
     view.sparkle('good')
     view.setMood('happy', 1.4)
     showPill(streak > 1 ? `Best move! x${streak}` : 'Best move!', 'good')
     vibrate(20)
+    sfxPerfect()
   } else if (res.optimal === false) {
     streak = 0
     hidePill()
@@ -1140,9 +1159,14 @@ canvas.addEventListener('contextmenu', (e) => e.preventDefault())
 $('btn-menu').addEventListener('click', openMenu)
 $('btn-restart').addEventListener('click', restart)
 $('menu-close').addEventListener('click', closeMenu)
-$('btn-play').addEventListener('click', closeIntro)
-$('btn-help').addEventListener('click', openIntro)
-$('btn-hints').addEventListener('click', toggleHints)
+$('btn-play').addEventListener('click', () => { ensureAudio(); closeIntro() })
+$('btn-help').addEventListener('click', () => { ensureAudio(); openIntro() })
+$('btn-hints').addEventListener('click', () => { ensureAudio(); toggleHints() })
+$('btn-audio').addEventListener('click', () => {
+  ensureAudio()
+  setAudio(!isAudioOn())
+  renderMenu()
+})
 $('btn-vibe').addEventListener('click', () => {
   vibrationOn = !vibrationOn
   writeJson('embigo-vibration', vibrationOn)
@@ -1437,6 +1461,8 @@ function rogueCheckPhase(): void {
 function soloPick(i: number): void {
   const run = rogue
   if (!run || !pickRelic(run, i)) return
+  ensureAudio()
+  sfxRelic()
   saveRogue()
   hideRogue()
   startMode({ kind: 'rogue' })
@@ -1461,6 +1487,7 @@ function failText(outcome: 'retry' | 'shielded' | 'over', run: RunState, why: st
 async function rogueFail(why: string): Promise<void> {
   const run = rogue
   if (!run) return
+  ensureAudio()
   rogueLocked = true
   queued = null
   const outcome = failFloor(run)
@@ -1471,10 +1498,13 @@ async function rogueFail(why: string): Promise<void> {
   updateHud()
   rogueUiRefresh()
   if (outcome === 'over') {
+    sfxFail()
     await sleep(600)
     showRogueOver(run)
     return
   }
+  if (outcome === 'shielded') sfxShield()
+  else sfxFail()
   showToast(outcome === 'shielded' ? 'Shield broken!' : 'Floor failed', failText(outcome, run, why), [
     { label: 'Retry floor', primary: true, run: () => startMode({ kind: 'rogue' }) },
   ])
@@ -1594,6 +1624,8 @@ function pickCoop(s: CoopSession, i: number): void {
     return
   }
   if (!pickRelic(run, i)) return
+  ensureAudio()
+  sfxRelic()
   loadCoop(0, null, null, s.names, '', true, run)
 }
 
