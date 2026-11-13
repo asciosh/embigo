@@ -949,7 +949,8 @@ export class View {
     const actor = this.actors[who]
     if (!actor) return
     const at = actor.model.group.position.clone().setY(0.7)
-    if (kind === 'good') this.burst(at, 16, [0x7dffb0, 0xffd166, 0xffffff], 2.4, -0.6)
+    // Enhanced sparkle for good moves: more particles, faster burst
+    if (kind === 'good') this.burst(at, 24, [0x7dffb0, 0xffd166, 0xffffff], 3.2, -0.6)
     else this.burst(at, 12, [0x8d99a6, 0x5b6190, 0xff8f8f], 1.8, 2)
   }
 
