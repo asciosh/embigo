@@ -10,7 +10,7 @@ import { KIND_LABEL, RELICS, budgetFor, canUndo, clearFloor, failFloor, floorKin
 import { ApiError, fetchLeaderboard, loadSession, login, logout, register, saveSession, submitScore, type Board, type Session } from './api'
 import { initAudioOnGesture, sfxMove, sfxBurn, sfxJump, sfxWin, sfxDeadEnd, sfxRelic, sfxFail, sfxShield, sfxPerfect, getAudioState, setAudio, isAudioOn } from './audio'
 import { readJson, writeJson } from './storage'
-import { updateStats } from './stats'
+import { updateStats, getStats } from './stats'
 
 const canvas = document.getElementById('game') as HTMLCanvasElement
 // a soft dark vignette on the edges of the screen (cheap, drawn by the browser, not the GPU scene)
@@ -234,6 +234,11 @@ function renderMenu(): void {
   $('vibe-label').textContent = vibrationOn ? 'Vibration: on' : 'Vibration: off'
   const audioState = getAudioState()
   $('audio-label').textContent = (audioState.sfx && audioState.music) ? 'Audio: on' : 'Audio: off'
+
+  const stats = getStats()
+  $('stat-wins').textContent = String(stats.wins)
+  $('stat-moves').textContent = String(stats.totalMoves)
+  $('stat-streak').textContent = String(stats.bestStreak)
 }
 
 // ---------- puzzles ----------
