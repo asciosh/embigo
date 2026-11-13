@@ -9,6 +9,8 @@ import { RoomClient, createRoom, isRoomCode, roomPlayers, type RoomState, type S
 import { KIND_LABEL, RELICS, budgetFor, canUndo, clearFloor, failFloor, floorKind, newRun, pickRelic, rogueCoopLevel, rogueLevel, skipFloor, useUndo, type RunState } from './rogue'
 import { ApiError, fetchLeaderboard, loadSession, login, logout, register, saveSession, submitScore, type Board, type Session } from './api'
 import { initAudioOnGesture, sfxMove, sfxBurn, sfxJump, sfxWin, sfxDeadEnd, sfxRelic, sfxFail, sfxShield, sfxPerfect, getAudioState, setAudio, isAudioOn } from './audio'
+import { readJson, writeJson } from './storage'
+import { updateStats } from './stats'
 
 const canvas = document.getElementById('game') as HTMLCanvasElement
 // a soft dark vignette on the edges of the screen (cheap, drawn by the browser, not the GPU scene)
@@ -50,23 +52,6 @@ type Mode =
 type Action = { label: string; run: () => void; primary?: boolean }
 
 // ---------- saved progress (kept in this browser) ----------
-
-function readJson<T>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(key)
-    return raw ? (JSON.parse(raw) as T) : fallback
-  } catch {
-    return fallback
-  }
-}
-
-function writeJson(key: string, value: unknown): void {
-  try {
-    localStorage.setItem(key, JSON.stringify(value))
-  } catch {
-    // storage can be blocked (private mode): progress is simply not saved
-  }
-}
 
 type CampaignSave = { unlocked: number; stars: Record<string, number> }
 type DailySave = { day: number; best: [number | null, number | null] }
@@ -441,6 +426,7 @@ async function sendDaily(day: number, idx: 1 | 2, moves: string, title: string, 
 }
 
 async function onWin(): Promise<void> {
+  updateStats(true, game.moves, streak)
   view.celebrate()
   if (mode.kind === 'rogue' && rogue) {
     await rogueSoloWin()
